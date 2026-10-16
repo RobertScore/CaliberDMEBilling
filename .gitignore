@@ -1,0 +1,38 @@
+# Secrets: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Never commit screenshots or exports of real systems (may contain PHI)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.heic
+*.pdf
+*.xlsx
+*.xls
+*.csv
+!docs/**/*.example.csv
+exports/
+uploads/
+backups/
+*.sql
+*.dump
+
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

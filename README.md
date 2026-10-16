@@ -1,1 +1,14 @@
-# CaliberDMEBilling
+# Caliber DME Billing
+
+Web-based DME billing software owned by **Caliber DME Billing**. Caliber bills on
+behalf of multiple DME distributors. Each client's data lives in its own separate
+database.
+
+Status: **planning**. No application code yet.
+
+- [`CLAUDE.md`](CLAUDE.md): the rules every change must follow (read this first)
+- [`docs/spec/SCREEN_SPEC.md`](docs/spec/SCREEN_SPEC.md): the screen-by-screen spec, taken from the current system
+- [`docs/OPEN_QUESTIONS.md`](docs/OPEN_QUESTIONS.md): questions for Caliber's team, with our current best guesses
+- [`docs/VENDORS_AND_BAAS.md`](docs/VENDORS_AND_BAAS.md): outside services allowed to handle patient data
+
+**This repository must never contain patient data, real screenshots or secrets.**

@@ -11,6 +11,9 @@ declare module "express-session" {
     userId?: number;
     /** The one client this user is working in right now. Set only by POST /api/session/client. */
     activeClientId?: number;
+    /** "View as" (read-only): the user a manager is looking through. Set only by POST /api/session/view-as. */
+    viewAsUserId?: number;
+    viewAsReason?: string;
   }
 }
 
@@ -21,6 +24,9 @@ export interface AuthedUser {
   initials: string;
   role: string;
   userType: string;
+  portalClientId: number | null;
+  portalPatientId: number | null;
+  mustChangePassword: boolean;
 }
 
 declare global {
@@ -28,6 +34,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthedUser;
+      /** Set while a manager is using "View as": the real person behind the request. */
+      realUser?: AuthedUser;
       tenant?: Tenant;
     }
   }
@@ -42,6 +50,21 @@ export class HttpError extends Error {
   }
 }
 
+const toAuthed = (u: typeof users.$inferSelect): AuthedUser => ({
+  id: u.id,
+  email: u.email,
+  name: u.name,
+  initials: u.initials,
+  role: u.role,
+  userType: u.userType,
+  portalClientId: u.portalClientId,
+  portalPatientId: u.portalPatientId,
+  mustChangePassword: u.mustChangePassword,
+});
+
+// While viewing as someone else, only these changes are allowed (to leave "View as" or sign out).
+const VIEW_AS_ALLOWED_WRITES = new Set(["DELETE /api/session/view-as", "POST /api/auth/logout", "POST /api/session/client"]);
+
 export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const userId = req.session.userId;
   if (!userId) throw new HttpError(401, "Please log in");
@@ -51,7 +74,25 @@ export async function requireAuth(req: Request, _res: Response, next: NextFuncti
     req.session.destroy(() => undefined);
     throw new HttpError(401, "Please log in");
   }
-  req.user = { id: u.id, email: u.email, name: u.name, initials: u.initials, role: u.role, userType: u.userType };
+  req.user = toAuthed(u);
+
+  if (req.session.viewAsUserId) {
+    const [t] = await db.select().from(users).where(eq(users.id, req.session.viewAsUserId));
+    if (!t || !t.active || !roleHas(u.role, "users.view_as")) {
+      req.session.viewAsUserId = undefined;
+    } else {
+      req.realUser = req.user;
+      req.user = toAuthed(t);
+      // "View as" is strictly read-only.
+      if (req.method !== "GET" && !VIEW_AS_ALLOWED_WRITES.has(`${req.method} ${req.path}`)) {
+        throw new HttpError(403, "You're viewing as someone else, which is read-only. Leave “View as” to make changes.");
+      }
+    }
+  }
+  // A temporary password must be changed before anything else.
+  if (u.mustChangePassword && !req.realUser && !["/api/session", "/api/auth/change-password", "/api/auth/logout"].includes(req.path)) {
+    throw new HttpError(428, "Please set a new password first");
+  }
   next();
 }
 
@@ -60,7 +101,7 @@ export async function userCanAccessClient(userId: number, clientId: number): Pro
   const db = getControlDb();
   const [u] = await db.select().from(users).where(eq(users.id, userId));
   if (!u || !u.active) return false;
-  if (u.userType === "client_portal") return u.portalClientId === clientId;
+  if (u.userType === "client_portal" || u.userType === "patient_portal") return u.portalClientId === clientId;
   const [row] = await db
     .select()
     .from(userClientAssignments)
@@ -74,7 +115,8 @@ export async function userCanAccessClient(userId: number, clientId: number): Pro
  */
 export async function requireClient(req: Request, _res: Response, next: NextFunction) {
   if (!req.user) throw new HttpError(401, "Please log in");
-  const clientId = req.session.activeClientId;
+  // Portal users are always in their one client; staff use the client picked in their session.
+  const clientId = req.user.userType === "staff" ? req.session.activeClientId : (req.user.portalClientId ?? undefined);
   if (!clientId) throw new HttpError(409, "Pick a client first");
   if (!(await userCanAccessClient(req.user.id, clientId))) {
     req.session.activeClientId = undefined;
@@ -102,8 +144,9 @@ export async function audit(
 ) {
   if (!req.tenant || !req.user) throw new Error("audit() needs a logged-in user and a client");
   await req.tenant.db.insert(auditLog).values({
-    userId: req.user.id,
-    userInitials: req.user.initials,
+    // Under "View as" the record names the real person and who they were viewing as.
+    userId: (req.realUser ?? req.user).id,
+    userInitials: req.realUser ? `${req.realUser.initials} as ${req.user.initials}` : req.user.initials,
     action: entry.action,
     entityType: entry.entityType,
     entityId: entry.entityId === undefined ? null : String(entry.entityId),

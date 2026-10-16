@@ -5,8 +5,14 @@ import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { getControlDb } from "./db/control";
 import { getTenant, type Tenant } from "./db/tenantDb";
-import { clients, hcpcsCodes, icd10Codes, modifiers, payers, userClientAssignments, users } from "@shared/schema/control";
-import { encounters, ledgerEntries, notes, alerts, patientInsurances, patients, serviceLines } from "@shared/schema/tenant";
+import type { Request } from "express";
+import { eq, sql } from "drizzle-orm";
+import { clients, documentRequirements, hcpcsCodes, icd10Codes, modifiers, noteTemplates, payers, userClientAssignments, users } from "@shared/schema/control";
+import { encounters, facilities, intakeItems, ledgerEntries, notes, alerts, patientInsurances, patients, providers, serviceLines } from "@shared/schema/tenant";
+import { seedLists } from "./lib/lists";
+import { demoPacket } from "./lib/demoPaperwork";
+import { DEFAULT_REQUIREMENTS } from "./routes/documents";
+import { createIntake, runReader } from "./routes/intake";
 import { encryptField, last4 } from "./lib/crypto";
 import { DATA_DIR, IN_MEMORY } from "./config";
 import { todayIso } from "@shared/dates";
@@ -81,7 +87,9 @@ export async function seedDemo(opts: { passwords?: Record<string, string> } = {}
   const existing = await db.select().from(clients);
   if (existing.length) {
     for (const c of existing) await getTenant(c.id, c.slug); // make sure every client DB is migrated
-    return null;
+    // Older demo folders get the newer features' demo data too.
+    const added = await seedPhase2(opts);
+    return added.length ? added : null;
   }
 
   await db.insert(modifiers).values(STARTER_MODIFIERS.map(([code, description]) => ({ code, description, source: STARTER })));
@@ -115,11 +123,83 @@ export async function seedDemo(opts: { passwords?: Record<string, string> } = {}
     await seedClientPatients(tenant, c.name, i, payerRows);
   }
 
-  if (!IN_MEMORY) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const lines = ["Caliber DME Billing: local demo logins (fake data only)", "", ...logins.map((l) => `${l.role.padEnd(20)} ${l.email.padEnd(28)} ${l.password}`), ""];
-    fs.writeFileSync(path.join(DATA_DIR, "DEMO_LOGINS.txt"), lines.join("\n"), { mode: 0o600 });
+  logins.push(...(await seedPhase2(opts, false)));
+  writeLogins(logins, false);
+  return logins;
+}
+
+function writeLogins(logins: { role: string; email: string; password: string }[], append: boolean) {
+  if (IN_MEMORY || !logins.length) return;
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const file = path.join(DATA_DIR, "DEMO_LOGINS.txt");
+  const lines = logins.map((l) => `${l.role.padEnd(20)} ${l.email.padEnd(28)} ${l.password}`);
+  if (append && fs.existsSync(file)) fs.appendFileSync(file, lines.join("\n") + "\n");
+  else fs.writeFileSync(file, ["Caliber DME Billing: local demo logins (fake data only)", "", ...lines, ""].join("\n"), { mode: 0o600 });
+}
+
+const DEFAULT_TEMPLATES = [
+  { name: "Called adjuster: authorization confirmed", category: "authorization", body: "Called {{adjuster}} at {{payer}} re claim {{claim}}. Authorization confirmed for {{patient}}. Auth #: ____.", followUpDays: null },
+  { name: "Called adjuster: left voicemail", category: "call", body: "Called {{adjuster}} at {{payer}} re claim {{claim}} for {{patient}}. Left voicemail requesting a call back.", followUpDays: 2 },
+  { name: "Requested missing documents", category: "documents", body: "Requested missing documents for {{patient}} from the referring office: ____. Will follow up.", followUpDays: 3 },
+  { name: "Denial received: reviewing", category: "denial", body: "Denial received from {{payer}} for {{patient}} (claim {{claim}}). Reason: ____. Reviewing for appeal.", followUpDays: 7 },
+  { name: "Claim status check", category: "call", body: "Checked claim status with {{payer}} for {{patient}} on {{today}}. Status: ____.", followUpDays: 14 },
+  { name: "Payment received", category: "payment", body: "Payment received from {{payer}} for {{patient}}. Check #____ for $____.", followUpDays: null },
+];
+
+/** Demo data for intake, documents, templates, lists, settings and the portals. Safe to run repeatedly. */
+async function seedPhase2(opts: { passwords?: Record<string, string> }, append = true) {
+  const db = getControlDb();
+  await seedLists();
+  if (!(await db.select().from(documentRequirements)).length) {
+    await db.insert(documentRequirements).values(DEFAULT_REQUIREMENTS.map((r) => ({ ...r, required: true, source: "ASSUMPTION Q-017 (starting list)" })));
   }
+  if (!(await db.select().from(noteTemplates)).length) {
+    await db.insert(noteTemplates).values(DEFAULT_TEMPLATES.map((t, i) => ({ ...t, sortOrder: i, updatedBy: "SYS" })));
+  }
+  const cl = await db.select().from(clients);
+  const logins: { role: string; email: string; password: string }[] = [];
+  for (const c of cl) {
+    const t = await getTenant(c.id, c.slug);
+    const [anyPatient] = await t.db.select().from(patients).where(sql`${patients.lastName} like 'TEST-%'`).limit(1);
+    const tag = anyPatient?.lastName ?? "TEST-SCORE";
+    // Rebuild the demo reader's memory of the sample paperwork (it's generated the same way every time).
+    demoPacket("new", tag);
+    demoPacket("existing", tag);
+    if (!(await t.db.select().from(providers)).length) {
+      await t.db.insert(providers).values([
+        { kind: "billing", name: `${c.name.replace(" (DEMO)", "")} BILLING (TEST)`, npi: "1234567893" },
+        { kind: "ordering", name: "DR. SAMPLE ORTHO (TEST)", npi: "1245319599" },
+      ]);
+      await t.db.insert(facilities).values({ name: "MAIN WAREHOUSE (TEST)", city: "SAN DIEGO", state: "CA", zip: "92101" });
+    }
+    if (!(await t.db.select().from(intakeItems)).length) {
+      const sysReq = { tenant: t, user: { id: 0, initials: "SYS" } } as unknown as Request;
+      for (const kind of ["new", "existing"] as const) {
+        const packet = demoPacket(kind, tag);
+        const file = { buffer: packet.pdf, originalname: packet.name, mimetype: "application/pdf", size: packet.pdf.length } as Express.Multer.File;
+        const item = await createIntake(sysReq, [file], {
+          source: kind === "new" ? "fax" : "email",
+          sender: kind === "new" ? "Fax (555) 010-0100 · Sample Orthopedic Clinic" : "deliveries@sample-dme.test",
+          subject: kind === "new" ? "New DME order" : "Signed delivery ticket",
+          createdBy: "SYS",
+        });
+        await runReader(t, item.id);
+      }
+    }
+    if (c.slug === "score-demo") {
+      for (const u of [
+        { email: "portal@score-demo.test", name: "Demo Client Admin", initials: "DCA", role: "client_admin", userType: "client_portal", portalPatientId: null as number | null },
+        { email: "patient@demo.test", name: "Patient One (TEST)", initials: "P1", role: "patient", userType: "patient_portal", portalPatientId: anyPatient?.id ?? 1 },
+      ]) {
+        const [exists] = await db.select().from(users).where(eq(users.email, u.email));
+        if (exists) continue;
+        const password = opts.passwords?.[u.email] ?? randomPassword();
+        await db.insert(users).values({ ...u, portalClientId: c.id, passwordHash: await bcrypt.hash(password, 10) });
+        logins.push({ role: u.role, email: u.email, password });
+      }
+    }
+  }
+  if (append) writeLogins(logins, true);
   return logins;
 }
 

@@ -147,7 +147,22 @@ export const paymentInput = z
   .refine((p) => p.patShareCents === 0 || !!p.patShareType, { message: "Pick a patient share type", path: ["patShareType"] });
 export type PaymentInput = z.infer<typeof paymentInput>;
 
-export const noteInput = z.object({ body: z.string().trim().min(1).max(4000) }).strict();
+export const noteInput = z
+  .object({
+    body: z.string().trim().min(1).max(4000),
+    category: z.string().trim().min(1).max(30).default("general"),
+    followUpDate: isoDate.optional(),
+    assignToUserId: z.number().int().positive().optional(),
+  })
+  .strict();
+export const taskInput = z
+  .object({
+    patientId: z.number().int().positive().optional(),
+    title: z.string().trim().min(1).max(200),
+    dueDate: isoDate,
+    assignToUserId: z.number().int().positive().optional(),
+  })
+  .strict();
 export const alertInput = z.object({ body: z.string().trim().min(1).max(500) }).strict();
 export const reverseInput = z.object({ reason: z.string().trim().min(3).max(200) }).strict();
 export const periodCloseInput = z.object({ closedThrough: isoDate }).strict();

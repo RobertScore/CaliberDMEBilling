@@ -4,7 +4,8 @@ import { eq, inArray } from "drizzle-orm";
 import { getControlDb } from "../db/control";
 import { clients, loginAudit, users, userClientAssignments } from "@shared/schema/control";
 import { loginInput, switchClientInput } from "@shared/validation";
-import { ROLE_PERMISSIONS, ROLE_LABELS, type StaffRole } from "@shared/permissions";
+import { ROLE_PERMISSIONS, ROLE_LABELS, type Role } from "@shared/permissions";
+import { aiReaderEnabled } from "../lib/reader";
 import { HttpError, requireAuth, userCanAccessClient } from "../middleware";
 
 export const authRouter = Router();
@@ -20,7 +21,7 @@ authRouter.post("/api/auth/login", async (req, res) => {
   await new Promise<void>((resolve, reject) => req.session.regenerate((err) => (err ? reject(err) : resolve())));
   req.session.userId = u.id;
   // Portal users only ever have their one client.
-  if (u.userType === "client_portal" && u.portalClientId) req.session.activeClientId = u.portalClientId;
+  if (u.userType !== "staff" && u.portalClientId) req.session.activeClientId = u.portalClientId;
   res.json({ ok: true });
 });
 
@@ -38,7 +39,7 @@ authRouter.get("/api/session", requireAuth, async (req, res) => {
   const db = getControlDb();
   const user = req.user!;
   let allowedIds: number[];
-  if (user.userType === "client_portal") {
+  if (user.userType !== "staff") {
     const [u] = await db.select().from(users).where(eq(users.id, user.id));
     allowedIds = u?.portalClientId ? [u.portalClientId] : [];
   } else {
@@ -49,8 +50,10 @@ authRouter.get("/api/session", requireAuth, async (req, res) => {
   const allowed = allowedIds.length ? await db.select().from(clients).where(inArray(clients.id, allowedIds)) : [];
   const active = allowed.find((c) => c.id === req.session.activeClientId) ?? null;
   res.json({
-    user: { ...user, roleLabel: ROLE_LABELS[user.role as StaffRole] ?? user.role },
-    permissions: ROLE_PERMISSIONS[user.role as StaffRole] ?? [],
+    user: { ...user, roleLabel: ROLE_LABELS[user.role as Role] ?? user.role },
+    permissions: ROLE_PERMISSIONS[user.role as Role] ?? [],
+    viewAs: req.realUser ? { realName: req.realUser.name, reason: req.session.viewAsReason ?? "" } : null,
+    aiReader: aiReaderEnabled() ? "on" : "off",
     clients: allowed.filter((c) => c.status === "active").map((c) => ({ id: c.id, name: c.name })),
     activeClient: active ? { id: active.id, name: active.name } : null,
   });
@@ -59,6 +62,7 @@ authRouter.get("/api/session", requireAuth, async (req, res) => {
 /** Switch the client you're working in. The server checks you're assigned to it. */
 authRouter.post("/api/session/client", requireAuth, async (req, res) => {
   const { clientId } = switchClientInput.parse(req.body);
+  if (req.user!.userType !== "staff") throw new HttpError(403, "Portal accounts stay in their own client");
   if (!(await userCanAccessClient(req.user!.id, clientId))) throw new HttpError(403, "You don't have access to that client");
   req.session.activeClientId = clientId;
   await getControlDb().insert(loginAudit).values({ email: req.user!.email, userId: req.user!.id, event: "client_switch", clientId });

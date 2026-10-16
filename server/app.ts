@@ -6,6 +6,13 @@ import { authRouter } from "./routes/auth";
 import { codesRouter } from "./routes/codes";
 import { patientsRouter } from "./routes/patients";
 import { ledgerRouter } from "./routes/ledger";
+import { documentsRouter } from "./routes/documents";
+import { intakeRouter } from "./routes/intake";
+import { workRouter } from "./routes/work";
+import { reportsRouter } from "./routes/reports";
+import { adminRouter } from "./routes/admin";
+import { portalRouter } from "./routes/portal";
+import multer from "multer";
 import { HttpError } from "./middleware";
 import { IS_PRODUCTION } from "./config";
 
@@ -42,6 +49,12 @@ export function createApp() {
   app.use(codesRouter);
   app.use(patientsRouter);
   app.use(ledgerRouter);
+  app.use(documentsRouter);
+  app.use(intakeRouter);
+  app.use(workRouter);
+  app.use(reportsRouter);
+  app.use(adminRouter);
+  app.use(portalRouter);
 
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "Not found")));
 
@@ -53,6 +66,7 @@ export function createApp() {
       });
     }
     if (err instanceof HttpError) return res.status(err.status).json({ message: err.message });
+    if (err instanceof multer.MulterError) return res.status(400).json({ message: err.code === "LIMIT_FILE_SIZE" ? "That file is too large (25 MB max)." : "That upload couldn't be read." });
     // Database errors arrive wrapped ("Failed query: ..."); the database's own reason is in .cause.
     const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : "";
     const msg = cause || (err instanceof Error ? err.message : String(err));

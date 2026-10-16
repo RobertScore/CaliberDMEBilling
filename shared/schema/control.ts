@@ -20,6 +20,9 @@ export const users = pgTable("users", {
   role: text("role").notNull(),
   // Portal users belong to exactly one client. Staff use user_client_assignments.
   portalClientId: integer("portal_client_id").references(() => clients.id),
+  // Patient portal users are linked to exactly one patient (an ID inside their client's own database).
+  portalPatientId: integer("portal_patient_id"),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   passwordHash: text("password_hash").notNull(),
   active: boolean("active").notNull().default(true),
   inactivityTimeoutMinutes: integer("inactivity_timeout_minutes").notNull().default(15),
@@ -97,3 +100,58 @@ export const modifiers = pgTable("modifiers", {
   description: text("description").notNull(),
   source: text("source").notNull(),
 });
+
+// Which documents each payer type needs before an order is "ready to bill".
+// ASSUMPTION Q-017: starting list; Caliber to confirm.
+export const documentRequirements = pgTable(
+  "document_requirements",
+  {
+    id: serial("id").primaryKey(),
+    payerType: text("payer_type").notNull(),
+    docType: text("doc_type").notNull(),
+    required: boolean("required").notNull().default(true),
+    note: text("note"),
+    source: text("source").notNull(),
+  },
+  (t) => [uniqueIndex("doc_req_idx").on(t.payerType, t.docType)],
+);
+
+// API keys for client systems (CENCOM, fax/email gateways). The key decides the client. Stored hashed.
+export const apiKeys = pgTable("api_keys", {
+  id: serial("id").primaryKey(),
+  clientId: integer("client_id").notNull().references(() => clients.id),
+  name: text("name").notNull(),
+  prefix: text("prefix").notNull(),
+  keyHash: text("key_hash").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdBy: integer("created_by"),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+});
+
+// Note templates Caliber can edit in Settings. Placeholders like {{patient}} fill in automatically.
+export const noteTemplates = pgTable("note_templates", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  category: text("category").notNull().default("general"),
+  body: text("body").notNull(),
+  followUpDays: integer("follow_up_days"), // optional: create a follow-up this many days out
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: text("updated_by"),
+});
+
+// Editable drop-down lists (write-off reasons, patient share reasons, note categories, payment types).
+export const picklistItems = pgTable(
+  "picklist_items",
+  {
+    id: serial("id").primaryKey(),
+    list: text("list").notNull(), // writeoff, pat_share, note_category, payment_type
+    code: text("code").notNull(),
+    label: text("label").notNull(),
+    active: boolean("active").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+  },
+  (t) => [uniqueIndex("picklist_idx").on(t.list, t.code)],
+);

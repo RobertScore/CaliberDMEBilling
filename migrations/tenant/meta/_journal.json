@@ -15,6 +15,13 @@
       "when": 1792177049502,
       "tag": "0001_append_only_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792193521023,
+      "tag": "0002_intake_documents_tasks",
+      "breakpoints": true
     }
   ]
 }

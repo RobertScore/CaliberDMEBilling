@@ -3,7 +3,9 @@ import { Router, type Request } from "express";
 import { and, asc, desc, eq, isNull, max, sql } from "drizzle-orm";
 import { auditLog, encounters, ledgerEntries, patientInsurances, patients, periodCloses, serviceLines } from "@shared/schema/tenant";
 import { encounterInput, paymentInput, periodCloseInput, reverseInput } from "@shared/validation";
-import { NO_PATIENT_BILLING_PAYER_TYPES, PAT_SHARE_TYPES, WRITEOFF_TYPES, type PayerType } from "@shared/picklists";
+import { NO_PATIENT_BILLING_PAYER_TYPES, type PayerType } from "@shared/picklists";
+import { findItem } from "../lib/lists";
+import { publish } from "../lib/events";
 import { todayIso } from "@shared/dates";
 import { sumCents } from "@shared/money";
 import { HttpError, audit, requireAuth, requireClient, requirePermission } from "../middleware";
@@ -113,6 +115,7 @@ ledgerRouter.post("/api/patients/:id/encounters", requirePermission("charge.post
     return { encounter: e, lines: saved };
   });
   await audit(req, { action: "post", entityType: "encounter", entityId: result.encounter.id, patientId: id, details: `${result.lines.length} lines` });
+  publish(req.tenant!.clientId, { kind: "ledger", patientId: id });
   res.status(201).json(result);
 });
 
@@ -124,8 +127,12 @@ ledgerRouter.post("/api/patients/:id/payments", requirePermission("payment.post"
   const postDate = todayIso();
   await assertOpenPeriod(req, postDate);
   if (p.depositDate > postDate) throw new HttpError(400, "Deposit date can't be in the future");
-  if (p.writeoffType && !WRITEOFF_TYPES.some((w) => w.code === p.writeoffType)) throw new HttpError(400, "Unknown write-off type");
-  if (p.patShareType && !PAT_SHARE_TYPES.some((w) => w.code === p.patShareType)) throw new HttpError(400, "Unknown patient share type");
+  // Reasons come from the lists Caliber maintains in Settings.
+  const writeoffItem = p.writeoffCents > 0 ? await findItem("writeoff", p.writeoffType ?? "") : null;
+  const patShareItem = p.patShareCents > 0 ? await findItem("pat_share", p.patShareType ?? "") : null;
+  if (p.writeoffCents > 0 && !writeoffItem) throw new HttpError(400, "Unknown write-off type");
+  if (p.patShareCents > 0 && !patShareItem) throw new HttpError(400, "Unknown patient share type");
+  if (!(await findItem("payment_type", p.paymentType))) throw new HttpError(400, "Unknown payment type");
   if (p.encounterId) {
     const [e] = await req.tenant!.db.select().from(encounters).where(and(eq(encounters.id, p.encounterId), eq(encounters.patientId, id)));
     if (!e) throw new HttpError(404, "Claim data not found for this patient");
@@ -162,16 +169,17 @@ ledgerRouter.post("/api/patients/:id/payments", requirePermission("payment.post"
     });
   }
   if (p.writeoffCents > 0) {
-    const w = WRITEOFF_TYPES.find((x) => x.code === p.writeoffType)!;
+    const w = writeoffItem!;
     rows.push({ ...base, kind: "writeoff", reasonCode: w.code, description: w.label, insuranceDeltaCents: -p.writeoffCents, patientDeltaCents: 0 });
   }
   if (p.patShareCents > 0) {
-    const s = PAT_SHARE_TYPES.find((x) => x.code === p.patShareType)!;
+    const s = patShareItem!;
     // Moves the amount from what insurance owes to what the patient owes.
     rows.push({ ...base, kind: "pat_share", reasonCode: s.code, description: s.label, insuranceDeltaCents: -p.patShareCents, patientDeltaCents: p.patShareCents });
   }
   const inserted = await req.tenant!.db.insert(ledgerEntries).values(rows).returning();
   await audit(req, { action: "post", entityType: "payment", entityId: inserted.map((r) => r.id).join(","), patientId: id });
+  publish(req.tenant!.clientId, { kind: "ledger", patientId: id });
   res.status(201).json({ entries: inserted, warnings });
 });
 
@@ -201,6 +209,7 @@ ledgerRouter.post("/api/ledger/:entryId/reverse", requirePermission("ledger.reve
     })
     .returning();
   await audit(req, { action: "reverse", entityType: "ledger_entry", entityId: orig.id, patientId: orig.patientId });
+  publish(req.tenant!.clientId, { kind: "ledger", patientId: orig.patientId });
   res.status(201).json(rev);
 });
 

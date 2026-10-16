@@ -7,7 +7,7 @@ import { getControlDb } from "../server/db/control";
 import { clients } from "@shared/schema/control";
 
 export const PW = "Test-Password-1";
-export const EMAILS = ["owner@caliber.test", "manager@caliber.test", "biller@caliber.test", "poster@caliber.test", "auditor@caliber.test"];
+export const EMAILS = ["owner@caliber.test", "manager@caliber.test", "biller@caliber.test", "poster@caliber.test", "auditor@caliber.test", "portal@score-demo.test", "patient@demo.test"];
 
 export async function setup() {
   await openControlDb();

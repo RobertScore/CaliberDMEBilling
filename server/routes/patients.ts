@@ -1,12 +1,14 @@
 // Patient registration, notes and alerts. Everything here runs inside ONE client's database (req.tenant).
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
-import { alerts, notes, patientInsurances, patients } from "@shared/schema/tenant";
-import { payers } from "@shared/schema/control";
+import { alerts, notes, patientInsurances, patients, tasks } from "@shared/schema/tenant";
+import { payers, users } from "@shared/schema/control";
 import { alertInput, noteInput, patientInput, type PatientInput } from "@shared/validation";
 import { getControlDb } from "../db/control";
 import { decryptField, encryptField, last4 } from "../lib/crypto";
-import { HttpError, audit, requireAuth, requireClient, requirePermission } from "../middleware";
+import { HttpError, audit, requireAuth, requireClient, requirePermission, userCanAccessClient } from "../middleware";
+import { findItem } from "../lib/lists";
+import { publish } from "../lib/events";
 
 export const patientsRouter = Router();
 patientsRouter.use("/api/patients", requireAuth, requireClient);
@@ -24,7 +26,7 @@ export async function loadPatientOr404(req: Request, id: number) {
 }
 
 /** Shape sent to the screen: SSN and member IDs masked (last 4 only). */
-async function patientView(req: Request, id: number) {
+export async function patientView(req: Request, id: number) {
   const p = await loadPatientOr404(req, id);
   const ins = await req.tenant!.db
     .select()
@@ -102,8 +104,8 @@ patientsRouter.get("/api/patients/:id", requirePermission("patient.view"), async
   res.json(view);
 });
 
-patientsRouter.post("/api/patients", requirePermission("patient.create"), async (req, res) => {
-  const input = patientInput.parse(req.body);
+/** Create a patient in the current client. Used by Register patient and by intake. */
+export async function createPatientRecord(req: Request, input: PatientInput) {
   const payerInfo = await resolvePayers(input);
   const db = req.tenant!.db;
   const { insurances: _i, ssn, ...fields } = input;
@@ -124,13 +126,18 @@ patientsRouter.post("/api/patients", requirePermission("patient.create"), async 
     return p;
   });
   await audit(req, { action: "create", entityType: "patient", entityId: created.id, patientId: created.id });
+  publish(req.tenant!.clientId, { kind: "patient", patientId: created.id });
+  return created;
+}
+
+patientsRouter.post("/api/patients", requirePermission("patient.create"), async (req, res) => {
+  const created = await createPatientRecord(req, patientInput.parse(req.body));
   res.status(201).json(await patientView(req, created.id));
 });
 
-patientsRouter.put("/api/patients/:id", requirePermission("patient.edit"), async (req, res) => {
-  const id = idParam(req);
+/** Replace a patient's details and insurance. Keeps stored SSN / member IDs when sent back blank. */
+export async function updatePatientRecord(req: Request, id: number, input: PatientInput, details: string) {
   await loadPatientOr404(req, id);
-  const input = patientInput.parse(req.body);
   const payerInfo = await resolvePayers(input);
   const db = req.tenant!.db;
   const { insurances: _i, ssn, ...fields } = input;
@@ -154,7 +161,13 @@ patientsRouter.put("/api/patients/:id", requirePermission("patient.edit"), async
     });
     if (rows.length) await tx.insert(patientInsurances).values(rows);
   });
-  await audit(req, { action: "update", entityType: "patient", entityId: id, patientId: id, details: `fields: ${Object.keys(req.body).join(",")}` });
+  await audit(req, { action: "update", entityType: "patient", entityId: id, patientId: id, details });
+  publish(req.tenant!.clientId, { kind: "patient", patientId: id });
+}
+
+patientsRouter.put("/api/patients/:id", requirePermission("patient.edit"), async (req, res) => {
+  const id = idParam(req);
+  await updatePatientRecord(req, id, patientInput.parse(req.body), `fields: ${Object.keys(req.body).join(",")}`);
   res.json(await patientView(req, id));
 });
 
@@ -186,11 +199,44 @@ patientsRouter.get("/api/patients/:id/notes", requirePermission("patient.view"),
 patientsRouter.post("/api/patients/:id/notes", requirePermission("note.create"), async (req, res) => {
   const id = idParam(req);
   await loadPatientOr404(req, id);
-  const { body } = noteInput.parse(req.body);
-  const [n] = await req.tenant!.db.insert(notes).values({ patientId: id, body, createdBy: req.user!.initials }).returning();
-  await audit(req, { action: "create", entityType: "note", entityId: n.id, patientId: id });
+  const input = noteInput.parse(req.body);
+  if (!(await findItem("note_category", input.category))) throw new HttpError(400, "Unknown note category");
+  const assignee = input.followUpDate ? await resolveAssignee(req, input.assignToUserId) : null;
+  const db = req.tenant!.db;
+  const n = await db.transaction(async (tx) => {
+    const [n] = await tx
+      .insert(notes)
+      .values({ patientId: id, body: input.body, category: input.category, followUpDate: input.followUpDate ?? null, createdBy: req.user!.initials })
+      .returning();
+    // A follow-up date puts the account on the Call List.
+    if (input.followUpDate && assignee) {
+      await tx.insert(tasks).values({
+        patientId: id,
+        noteId: n.id,
+        title: input.body.split("\n")[0].slice(0, 120),
+        dueDate: input.followUpDate,
+        assignedUserId: assignee.id,
+        assignedInitials: assignee.initials,
+        createdBy: req.user!.initials,
+      });
+    }
+    return n;
+  });
+  await audit(req, { action: "create", entityType: "note", entityId: n.id, patientId: id, details: input.followUpDate ? "with follow-up" : undefined });
+  publish(req.tenant!.clientId, { kind: "notes", patientId: id });
+  if (input.followUpDate) publish(req.tenant!.clientId, { kind: "tasks", patientId: id });
   res.status(201).json(n);
 });
+
+/** Who a follow-up goes to: the chosen teammate (must work in this client), or the person writing the note. */
+export async function resolveAssignee(req: Request, userId?: number) {
+  if (!userId || userId === req.user!.id) return { id: req.user!.id, initials: req.user!.initials };
+  const [u] = await getControlDb().select().from(users).where(eq(users.id, userId));
+  if (!u || !u.active || u.userType !== "staff" || !(await userCanAccessClient(u.id, req.tenant!.clientId))) {
+    throw new HttpError(400, "That person doesn't work in this client");
+  }
+  return { id: u.id, initials: u.initials };
+}
 
 // Alerts: show when the account opens; entered by hand and removable.
 patientsRouter.get("/api/patients/:id/alerts", requirePermission("patient.view"), async (req, res) => {
@@ -211,6 +257,7 @@ patientsRouter.post("/api/patients/:id/alerts", requirePermission("alert.manage"
   const { body } = alertInput.parse(req.body);
   const [a] = await req.tenant!.db.insert(alerts).values({ patientId: id, body, createdBy: req.user!.initials }).returning();
   await audit(req, { action: "create", entityType: "alert", entityId: a.id, patientId: id });
+  publish(req.tenant!.clientId, { kind: "alerts", patientId: id });
   res.status(201).json(a);
 });
 
@@ -224,5 +271,6 @@ patientsRouter.delete("/api/patients/:id/alerts/:alertId", requirePermission("al
     .returning();
   if (!result.length) throw new HttpError(404, "Alert not found");
   await audit(req, { action: "remove", entityType: "alert", entityId: alertId, patientId: id });
+  publish(req.tenant!.clientId, { kind: "alerts", patientId: id });
   res.json({ ok: true });
 });

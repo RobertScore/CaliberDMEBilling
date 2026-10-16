@@ -147,6 +147,8 @@ export const notes = pgTable("notes", {
   id: serial("id").primaryKey(),
   patientId: integer("patient_id").notNull().references(() => patients.id),
   body: text("body").notNull(),
+  category: text("category").notNull().default("general"),
+  followUpDate: date("follow_up_date"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   createdBy: text("created_by").notNull(),
 });
@@ -182,4 +184,91 @@ export const auditLog = pgTable("audit_log", {
   entityId: text("entity_id"),
   patientId: integer("patient_id"),
   details: text("details"), // never PHI values, only field names / counts
+});
+
+// Paperwork that arrived (fax, email, upload, portals, API) and is waiting to be read, matched and filed.
+export const intakeItems = pgTable("intake_items", {
+  id: serial("id").primaryKey(),
+  source: text("source").notNull(),
+  sender: text("sender"),
+  subject: text("subject"),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  status: text("status").notNull().default("new"), // new, review, done, rejected
+  reader: text("reader"), // claude, demo, manual
+  extraction: jsonb("extraction"),
+  readerError: text("reader_error"),
+  suggestedPatientId: integer("suggested_patient_id"), // e.g. uploaded through that patient's own portal
+  decision: text("decision"), // new | existing
+  patientId: integer("patient_id"),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  completedBy: text("completed_by"),
+  createdBy: text("created_by").notNull(),
+});
+
+// Every stored file. The bytes are encrypted with this client's key and kept in this client's own storage.
+export const documents = pgTable("documents", {
+  id: serial("id").primaryKey(),
+  patientId: integer("patient_id").references(() => patients.id),
+  intakeId: integer("intake_id").references(() => intakeItems.id),
+  docType: text("doc_type").notNull().default("other"),
+  title: text("title"),
+  originalName: text("original_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  sha256: text("sha256").notNull(),
+  storageKey: text("storage_key").notNull().unique(),
+  source: text("source").notNull(),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  uploadedBy: text("uploaded_by").notNull(),
+  // A person confirmed the type is right and the document is complete and readable.
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  verifiedBy: text("verified_by"),
+  removedAt: timestamp("removed_at", { withTimezone: true }),
+  removedBy: text("removed_by"),
+});
+
+// Follow-ups and the Call List. Created from notes with a follow-up date, or directly.
+export const tasks = pgTable("tasks", {
+  id: serial("id").primaryKey(),
+  patientId: integer("patient_id").references(() => patients.id),
+  noteId: integer("note_id"),
+  title: text("title").notNull(),
+  dueDate: date("due_date").notNull(),
+  assignedUserId: integer("assigned_user_id"),
+  assignedInitials: text("assigned_initials"),
+  status: text("status").notNull().default("open"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdBy: text("created_by").notNull(),
+  doneAt: timestamp("done_at", { withTimezone: true }),
+  doneBy: text("done_by"),
+});
+
+// Data menu: providers and facilities for this client.
+export const providers = pgTable("providers", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(), // rendering, billing, ordering, referring
+  name: text("name").notNull(),
+  npi: text("npi"),
+  taxonomy: text("taxonomy"),
+  phone: text("phone"),
+  active: boolean("active").notNull().default(true),
+});
+
+export const facilities = pgTable("facilities", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  address1: text("address1"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  npi: text("npi"),
+  active: boolean("active").notNull().default(true),
+});
+
+// Client-level settings (company info, ledger colors). Key/value.
+export const clientSettings = pgTable("client_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: text("updated_by"),
 });

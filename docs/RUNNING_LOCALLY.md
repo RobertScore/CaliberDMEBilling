@@ -28,7 +28,7 @@ npm run dev
   databases, one per fake client.
 - Terminal prints the **demo logins**. They're also saved in
   `data/DEMO_LOGINS.txt`.
-- Open **http://localhost:5000** in your browser.
+- Open **http://localhost:3000** in your browser.
 
 To stop it, click the Terminal window and press `Ctrl+C`.
 

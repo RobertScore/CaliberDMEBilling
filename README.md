@@ -11,7 +11,7 @@ needed before real patient data can go in.
 
 ```
 npm install
-npm run dev     # then open http://localhost:5000
+npm run dev     # then open http://localhost:3000
 npm test        # automated checks
 ```
 

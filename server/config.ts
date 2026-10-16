@@ -5,4 +5,5 @@ export const DATA_DIR = process.env.DATA_DIR ?? path.resolve(process.cwd(), "dat
 export const IN_MEMORY = DATA_DIR === "memory";
 export const MIGRATIONS_DIR = path.resolve(import.meta.dirname, "..", "migrations");
 export const IS_PRODUCTION = process.env.NODE_ENV === "production";
-export const PORT = Number(process.env.PORT ?? 5000);
+// Not 5000: newer Macs use port 5000 for AirPlay Receiver.
+export const PORT = Number(process.env.PORT ?? 3000);

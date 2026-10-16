@@ -12,6 +12,17 @@ export interface PatientSummary {
   firstName: string;
   dob: string;
   coverageType: string;
+  balanceCents?: number;
+}
+
+export interface Dashboard {
+  patientCount: number;
+  claimsNotBilled: number;
+  insuranceOwedCents: number;
+  patientOwedCents: number;
+  entriesPostedToday: number;
+  recent: (PatientSummary & { balanceCents: number; lastActivity: string })[];
+  closedThrough: string | null;
 }
 
 export interface Insurance {

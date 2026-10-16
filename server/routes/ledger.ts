@@ -1,7 +1,7 @@
 // Charge entry, payment posting and the patient ledger. One client's database only (req.tenant).
 import { Router, type Request } from "express";
-import { and, asc, desc, eq, max } from "drizzle-orm";
-import { auditLog, encounters, ledgerEntries, patientInsurances, periodCloses, serviceLines } from "@shared/schema/tenant";
+import { and, asc, desc, eq, isNull, max, sql } from "drizzle-orm";
+import { auditLog, encounters, ledgerEntries, patientInsurances, patients, periodCloses, serviceLines } from "@shared/schema/tenant";
 import { encounterInput, paymentInput, periodCloseInput, reverseInput } from "@shared/validation";
 import { NO_PATIENT_BILLING_PAYER_TYPES, PAT_SHARE_TYPES, WRITEOFF_TYPES, type PayerType } from "@shared/picklists";
 import { todayIso } from "@shared/dates";
@@ -10,7 +10,7 @@ import { HttpError, audit, requireAuth, requireClient, requirePermission } from 
 import { loadPatientOr404 } from "./patients";
 
 export const ledgerRouter = Router();
-ledgerRouter.use(["/api/patients", "/api/ledger", "/api/periods", "/api/audit"], requireAuth, requireClient);
+ledgerRouter.use(["/api/patients", "/api/ledger", "/api/periods", "/api/audit", "/api/dashboard"], requireAuth, requireClient);
 
 function idParam(req: Request, name = "id"): number {
   const n = Number(req.params[name]);
@@ -221,4 +221,51 @@ ledgerRouter.post("/api/periods/close", requirePermission("period.close"), async
 
 ledgerRouter.get("/api/audit", requirePermission("audit.view"), async (req, res) => {
   res.json(await req.tenant!.db.select().from(auditLog).orderBy(desc(auditLog.id)).limit(500));
+});
+
+/** Home screen numbers for the CURRENT client only: work waiting, money owed, recent accounts. */
+ledgerRouter.get("/api/dashboard", requirePermission("patient.view"), async (req, res) => {
+  const db = req.tenant!.db;
+  const [{ patientCount }] = await db.select({ patientCount: sql<number>`count(*)::int` }).from(patients).where(isNull(patients.removedAt));
+  const [{ notBilled }] = await db
+    .select({ notBilled: sql<number>`count(*)::int` })
+    .from(encounters)
+    .innerJoin(patients, eq(patients.id, encounters.patientId))
+    .where(and(eq(encounters.claimStatus, "not_billed"), isNull(patients.removedAt)));
+  const [totals] = await db
+    .select({
+      insurance: sql<number>`coalesce(sum(${ledgerEntries.insuranceDeltaCents}), 0)::int`,
+      patient: sql<number>`coalesce(sum(${ledgerEntries.patientDeltaCents}), 0)::int`,
+    })
+    .from(ledgerEntries)
+    .innerJoin(patients, eq(patients.id, ledgerEntries.patientId))
+    .where(isNull(patients.removedAt));
+  const [{ postedToday }] = await db
+    .select({ postedToday: sql<number>`count(*)::int` })
+    .from(ledgerEntries)
+    .where(eq(ledgerEntries.postDate, todayIso()));
+  const recent = await db
+    .select({
+      id: patients.id,
+      accountNumber: patients.accountNumber,
+      lastName: patients.lastName,
+      firstName: patients.firstName,
+      coverageType: patients.coverageType,
+      balanceCents: sql<number>`coalesce((select sum(insurance_delta_cents + patient_delta_cents) from ledger_entries le where le.patient_id = "patients"."id"), 0)::int`,
+      lastActivity: sql<string>`greatest("patients"."created_at", coalesce((select max(le.created_at) from ledger_entries le where le.patient_id = "patients"."id"), "patients"."created_at"))`,
+    })
+    .from(patients)
+    .where(isNull(patients.removedAt))
+    .orderBy(desc(sql`7`))
+    .limit(6);
+  await audit(req, { action: "view", entityType: "dashboard", details: `${recent.length} recent accounts` });
+  res.json({
+    patientCount,
+    claimsNotBilled: notBilled,
+    insuranceOwedCents: totals.insurance,
+    patientOwedCents: totals.patient,
+    entriesPostedToday: postedToday,
+    recent,
+    closedThrough: await closedThrough(req),
+  });
 });

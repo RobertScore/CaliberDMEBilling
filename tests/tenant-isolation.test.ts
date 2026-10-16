@@ -64,10 +64,24 @@ describe("client separation", () => {
     await owner.post("/api/patients").send({ ...newPatient("SNEAKY"), clientId: ctx.pacific }).expect(400);
   });
 
+  it("the home dashboard only counts the current client", async () => {
+    const owner = await login(ctx.app, "owner@caliber.test", ctx.pacific);
+    const d = (await owner.get("/api/dashboard").expect(200)).body as { recent: P[]; patientCount: number };
+    expect(d.recent.length).toBeGreaterThan(0);
+    expect(d.recent.every((p) => p.lastName.startsWith("TEST-PACIFIC"))).toBe(true);
+    const pacificCount = d.patientCount;
+    await owner.post("/api/session/client").send({ clientId: ctx.lonestar }).expect(200);
+    const l = (await owner.get("/api/dashboard").expect(200)).body as { recent: P[]; patientCount: number };
+    expect(l.recent.every((p) => !p.lastName.startsWith("TEST-PACIFIC") && !p.lastName.startsWith("TEST-SCORE"))).toBe(true);
+    expect(l.patientCount).not.toBeNaN();
+    expect(pacificCount).toBeGreaterThan(0);
+  });
+
   it("nothing patient-related works until a client is picked", async () => {
     const owner = await login(ctx.app, "owner@caliber.test");
     await owner.get("/api/patients").expect(409);
     await owner.get("/api/audit").expect(409);
+    await owner.get("/api/dashboard").expect(409);
   });
 
   it("removing a user's assignment cuts access immediately, even mid-session", async () => {

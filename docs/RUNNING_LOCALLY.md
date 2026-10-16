@@ -42,16 +42,20 @@ To stop it, click the Terminal window and press `Ctrl+C`.
 | poster@caliber.test | Post payments, in SCORE (DEMO) only |
 | auditor@caliber.test | Look only, plus the audit log |
 
-- **Shortcuts** (after picking a client): `Ctrl+R` Patient Entry, `Ctrl+L`
-  Ledger, `Ctrl+K` Charge Entry, `Ctrl+P` Payment Posting. `Alt` + the same
-  letter also works.
-- Open the ledger for `TEST-SCORE, PATIENT ONE` to see the alert pop up and the
-  color-coded entries.
-- Switch clients at the top. Everything from the previous client disappears,
-  because each client is a separate database.
-- Sign in as the biller and notice Payments is greyed out. If you tried anyway,
-  the server refuses it.
-- Type a DOB as `03151985` and watch the slashes appear.
+- **Find anyone fast:** press `/` anywhere, type a name, then press `Enter`.
+- **Shortcuts:** `Ctrl+R` registers a patient. `Ctrl+K` posts charges, `Ctrl+P`
+  posts a payment, and `Ctrl+L` opens the ledger. If a patient is already open,
+  these go straight to that patient. `Alt` + the same letter also works.
+- **Follow a whole claim:** register a patient, and you land on Post charges.
+  Post them, then Post a payment. The account header always says what to do
+  next.
+- **The patient workspace:** Activity (by claim, or the classic color-coded
+  ledger), Post charges, Post a payment, Patient & insurance, Notes & alerts.
+- **Alerts:** open `TEST-SCORE, PATIENT ONE` and the alert pops up straight away.
+- **Switching clients** (top of the sidebar) clears everything from the
+  previous client.
+- **Roles:** sign in as the biller and notice Post a payment is greyed out. If
+  they tried anyway, the server would refuse.
 
 ## Start over with fresh demo data
 

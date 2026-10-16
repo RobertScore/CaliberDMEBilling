@@ -49,6 +49,23 @@ describe("ledger", () => {
     expect(L.balances.totalBalanceCents).toBe(45000 + 31503 - 30000 - 10000);
   });
 
+  it("patient search and the home dashboard show each patient's true balance", async () => {
+    const { owner, id } = await freshPatient();
+    await owner.post(`/api/patients/${id}/encounters`).send(newEncounter).expect(201);
+    await owner.post(`/api/patients/${id}/payments`).send({ depositDate: "2026-10-01", payerName: "T", paymentType: "CHECK", paymentCents: 12345 }).expect(201);
+    const L = (await owner.get(`/api/patients/${id}/ledger`).expect(200)).body;
+    expect(L.balances.totalBalanceCents).toBe(45000 - 12345);
+    const found = (await owner.get(`/api/patients?q=${L.patient.lastName}`).expect(200)).body;
+    expect(found[0].balanceCents).toBe(45000 - 12345);
+    const dash = (await owner.get("/api/dashboard").expect(200)).body;
+    const mine = dash.recent.find((p: { id: number }) => p.id === id);
+    expect(mine.balanceCents).toBe(45000 - 12345);
+    // A patient with no activity has a zero balance (not someone else's).
+    const empty = (await owner.post("/api/patients").send(newPatient("NOACTIVITY")).expect(201)).body;
+    const e = (await owner.get(`/api/patients?q=NOACTIVITY`).expect(200)).body.find((p: { id: number }) => p.id === empty.id);
+    expect(e.balanceCents).toBe(0);
+  });
+
   it("a reversal undoes an entry without erasing it, and only once", async () => {
     const { owner, id } = await freshPatient();
     await owner.post(`/api/patients/${id}/encounters`).send(newEncounter).expect(201);

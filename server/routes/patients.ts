@@ -85,6 +85,7 @@ patientsRouter.get("/api/patients", requirePermission("patient.view"), async (re
       firstName: patients.firstName,
       dob: patients.dob,
       coverageType: patients.coverageType,
+      balanceCents: sql<number>`coalesce((select sum(insurance_delta_cents + patient_delta_cents) from ledger_entries le where le.patient_id = "patients"."id"), 0)::int`,
     })
     .from(patients)
     .where(and(isNull(patients.removedAt), where))

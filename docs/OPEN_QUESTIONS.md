@@ -67,3 +67,11 @@ software does until a question is answered. In code, a guess is marked
 | Q-046 | Should past-due patient messages ever apply to Work Comp or VA? | No; only payer types that allow patient billing | Open |
 | Q-047 | Which Work Comp forms are used besides the RFA and Second Bill Review? | Build those two first | Open |
 | Q-048 | Which write-off and patient-share reasons carry over? | All of them, as editable lists that managers can hide | Open |
+
+## Raised while building Phase 1
+
+| ID | Question | Best guess | Status |
+|---|---|---|---|
+| Q-050 | When a payer type doesn't match the patient's coverage type (e.g. a WC patient with a VA payer), should the software block it or just warn? | Allow it for now; Phase 3 rules check will flag it | Open |
+| Q-051 | Should a Work Comp / VA patient-share entry be blocked outright, or allowed with a warning? | Allowed with a warning (see Q-012, Q-046) | Open |
+| Q-052 | Should removing a patient be blocked while the account still has a balance? | Not blocked yet; management only, and nothing is erased | Open |

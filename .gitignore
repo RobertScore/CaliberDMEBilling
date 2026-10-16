@@ -17,10 +17,12 @@ secrets/
 *.xls
 *.csv
 !docs/**/*.example.csv
+!client/public/**
 exports/
 uploads/
 backups/
 *.sql
+!migrations/**/*.sql
 *.dump
 
 # Dependencies and build output
@@ -36,3 +38,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# Local demo data (fake data only, but never commit it)
+data/

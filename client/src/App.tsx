@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, ArrowRight } from "lucide-react";
-import { get, post, ApiError } from "@/lib/api";
+import { get, post, del, ApiError } from "@/lib/api";
+import { useLiveUpdates } from "@/lib/live";
 import type { SessionInfo } from "@/lib/types";
 import { SessionProvider, useSession } from "@/lib/session";
 import { NavProvider, useNav } from "@/lib/nav";
@@ -14,6 +15,14 @@ import { Patients } from "@/screens/Patients";
 import { PatientWorkspace } from "@/screens/PatientWorkspace";
 import { PatientForm } from "@/screens/PatientForm";
 import { AuditLogScreen, CloseBooksScreen } from "@/screens/AdminScreens";
+import { InboxScreen, IntakeReview } from "@/screens/Inbox";
+import { CallList } from "@/screens/CallList";
+import { Reports } from "@/screens/Reports";
+import { UsersScreen } from "@/screens/Users";
+import { SettingsScreen } from "@/screens/Settings";
+import { ChangePassword } from "@/screens/ChangePassword";
+import { ClientPortal } from "@/screens/ClientPortal";
+import { PatientPortal } from "@/screens/PatientPortal";
 
 export default function App() {
   const qc = useQueryClient();
@@ -34,11 +43,22 @@ export default function App() {
   return (
     <SessionProvider value={session.data}>
       <ToastProvider>
-        <NavProvider>
-          <Workspace />
-        </NavProvider>
+        <Router />
       </ToastProvider>
     </SessionProvider>
+  );
+}
+
+/** Three kinds of user, three separate apps. They never share screens. */
+function Router() {
+  const s = useSession();
+  if (s.user.mustChangePassword) return <ChangePassword />;
+  if (s.user.userType === "client_portal") return <ClientPortal />;
+  if (s.user.userType === "patient_portal") return <PatientPortal />;
+  return (
+    <NavProvider>
+      <Workspace />
+    </NavProvider>
   );
 }
 
@@ -47,6 +67,7 @@ function Workspace() {
   const s = useSession();
   const nav = useNav();
   const [idleWarning, setIdleWarning] = useState(false);
+  useLiveUpdates(!!s.activeClient);
 
   // Keyboard shortcuts from the spec (MAIN SCREEN tab). Alt + the same letter also works.
   // If a patient is already open, the shortcut goes straight to that patient.
@@ -63,12 +84,13 @@ function Workspace() {
       const k = e.code.replace("Key", "").toLowerCase();
       const v = nav.view;
       const withPatient = (section: "activity" | "charge" | "payment", purpose: string) =>
-        v.name === "patient" ? nav.go({ ...v, section }) : nav.pickPatient(purpose, (id, l) => nav.openPatient(id, l, section));
+        v.name === "patient" ? nav.setSection(v.id, section) : nav.pickPatient(purpose, (id, l) => nav.openPatient(id, l, section));
       const actions: Record<string, () => void> = {
         r: () => s.can("patient.create") && nav.go({ name: "new-patient" }),
         l: () => withPatient("activity", "Open the ledger for…"),
         k: () => s.can("charge.post") && withPatient("charge", "Post charges for…"),
         p: () => s.can("payment.post") && withPatient("payment", "Post a payment for…"),
+        o: () => s.can("task.manage") && nav.go({ name: "calls" }),
       };
       if (!actions[k]) return;
       e.preventDefault();
@@ -108,6 +130,13 @@ function Workspace() {
     await qc.refetchQueries({ queryKey: ["session"] });
   }
 
+  async function leaveViewAs() {
+    await del("/api/session/view-as");
+    nav.reset();
+    qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "session" });
+    await qc.refetchQueries({ queryKey: ["session"] });
+  }
+
   const v = nav.view;
   let screen;
   if (!s.activeClient) {
@@ -130,21 +159,43 @@ function Workspace() {
   else if (v.name === "new-patient")
     screen = (
       <Page title="Register a patient" subtitle="Start with the essentials. Everything else is under “More details”." width="max-w-5xl">
-        <PatientForm onSaved={(id, label) => nav.openPatient(id, label, "charge")} onCancel={() => nav.go({ name: "home" })} />
+        <PatientForm onSaved={(id, label) => nav.openPatient(id, label, "overview")} onCancel={() => nav.go({ name: "home" })} />
       </Page>
     );
-  else if (v.name === "patient") screen = <PatientWorkspace key={v.id} id={v.id} section={v.section} />;
+  else if (v.name === "inbox") screen = <InboxScreen />;
+  else if (v.name === "intake") screen = <IntakeReview key={v.id} id={v.id} />;
+  else if (v.name === "calls") screen = <CallList />;
+  else if (v.name === "reports") screen = <Reports />;
+  else if (v.name === "users") screen = <UsersScreen />;
+  else if (v.name === "settings") screen = <SettingsScreen />;
   else if (v.name === "audit") screen = <AuditLogScreen />;
   else if (v.name === "close") screen = <CloseBooksScreen />;
 
+  // Every open patient stays mounted (hidden when not shown), so switching tabs is instant and keeps your place.
+  const activeId = v.name === "patient" ? v.id : null;
+  const sideId = activeId !== null && nav.split !== null && nav.split !== activeId ? nav.split : null;
+  const patients = s.activeClient && nav.tabs.length > 0 && (
+    <div className={activeId !== null ? "flex min-h-full" : "hidden"}>
+      {nav.tabs.map((t) => {
+        const where = t.id === activeId ? "main" : t.id === sideId ? "side" : "hidden";
+        return (
+          <div key={t.id} className={where === "main" ? "min-w-0 flex-1" : where === "side" ? "w-[42%] shrink-0 border-l border-slate-200 bg-slate-50/60" : "hidden"} style={{ order: where === "side" ? 2 : 1 }}>
+            <PatientWorkspace id={t.id} section={t.section} compact={where === "side"} onClose={where === "side" ? () => nav.setSplit(null) : undefined} />
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <Shell onSwitchClient={switchClient} onLogout={logout}>
+    <Shell onSwitchClient={switchClient} onLogout={logout} onLeaveViewAs={leaveViewAs}>
       {idleWarning && (
         <div className="sticky top-0 z-30 bg-amber-100 px-4 py-2 text-center text-sm text-amber-900">
           You'll be signed out in about 2 minutes for inactivity. Move the mouse or press a key to stay signed in.
         </div>
       )}
-      {screen}
+      {activeId === null && screen}
+      {patients}
       {nav.picker && (
         <PatientSpotlight
           purpose={nav.picker.purpose}

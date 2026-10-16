@@ -9,8 +9,9 @@ import type { Encounter, LedgerEntry, LedgerView } from "@/lib/types";
 import { useSession } from "@/lib/session";
 import { Badge, EmptyState, useToast } from "@/components/ui";
 import { ErrorBox, Modal, Money } from "@/components/inputs";
-import { LEDGER_KINDS, type LedgerKind } from "@shared/picklists";
+import { LEDGER_KINDS } from "@shared/picklists";
 import { isoToDisplay } from "@shared/dates";
+import { useLedgerColors } from "@/lib/ledgerColors";
 import { formatCents, sumCents } from "@shared/money";
 
 const KIND_DOT: Record<string, string> = {
@@ -164,7 +165,7 @@ export function Activity({ L }: { L: LedgerView }) {
 function ClassicLedger({ L, onReverse }: { L: LedgerView; onReverse?: (e: LedgerEntry) => void }) {
   let running = 0;
   const rows = [...L.entries].sort((a, b) => (a.serviceDateFrom ?? a.postDate).localeCompare(b.serviceDateFrom ?? b.postDate) || a.id - b.id);
-  const color = (k: string) => LEDGER_KINDS[k as LedgerKind]?.color ?? "#fff";
+  const color = useLedgerColors();
   return (
     <div className="card overflow-x-auto">
       <table className="w-full text-xs">
@@ -176,7 +177,7 @@ function ClassicLedger({ L, onReverse }: { L: LedgerView; onReverse?: (e: Ledger
         </thead>
         <tbody>
           {L.encounters.map((e) => (
-            <tr key={`c${e.id}`} style={{ background: LEDGER_KINDS.claim_data.color }}>
+            <tr key={`c${e.id}`} style={{ background: color("claim_data") }}>
               <td className="px-3 py-1.5">{isoToDisplay(e.createdAt.slice(0, 10))}</td>
               <td>{isoToDisplay(e.serviceDateFrom)}</td>
               <td colSpan={6}><b>Claim data</b> · Dx {e.diagnosisCodes.map((d, i) => `${String.fromCharCode(65 + i)}:${d}`).join("  ")}</td>

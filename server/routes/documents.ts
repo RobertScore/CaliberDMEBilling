@@ -126,7 +126,10 @@ documentsRouter.get("/api/documents/:docId/file", requirePermission("document.vi
   await audit(req, { action: "view", entityType: "document", entityId: d.id, patientId: d.patientId ?? undefined });
   res.setHeader("Content-Type", d.mimeType);
   res.setHeader("Content-Disposition", `inline; filename="document-${d.id}"`);
-  res.setHeader("Content-Security-Policy", "sandbox");
+  // Only our own pages may show it in a frame. "sandbox" stops Chrome's built-in PDF viewer, so PDFs get
+  // a no-scripts policy instead; images and other types stay fully sandboxed.
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Content-Security-Policy", d.mimeType === "application/pdf" ? "default-src 'none'; object-src 'self'; frame-ancestors 'self'" : "sandbox; frame-ancestors 'self'");
   res.send(data);
 });
 

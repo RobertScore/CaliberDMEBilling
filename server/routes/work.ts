@@ -9,6 +9,7 @@ import { todayIso } from "@shared/dates";
 import { sumCents } from "@shared/money";
 import { getControlDb } from "../db/control";
 import { publish, subscribe } from "../lib/events";
+import { ageEntries } from "../lib/aging";
 import { HttpError, audit, requireAuth, requireClient, requirePermission } from "../middleware";
 import { loadPatientOr404, patientView, resolveAssignee } from "./patients";
 import { documentChecklist } from "./documents";
@@ -38,12 +39,7 @@ workRouter.get("/api/patients/:id/overview", requirePermission("patient.view"), 
   const ins = await db.select().from(patientInsurances).where(eq(patientInsurances.patientId, id));
 
   const today = todayIso();
-  const aging: Record<string, number> = { "0-30": 0, "31-60": 0, "61-90": 0, "91-120": 0, "121+": 0 };
-  for (const e of entries) {
-    const days = Math.floor((Date.parse(today) - Date.parse(e.serviceDateFrom ?? e.postDate)) / 86400000);
-    const k = days <= 30 ? "0-30" : days <= 60 ? "31-60" : days <= 90 ? "61-90" : days <= 120 ? "91-120" : "121+";
-    aging[k] += e.insuranceDeltaCents + e.patientDeltaCents;
-  }
+  const aging = ageEntries(entries, new Map(encs.map((e) => [e.id, e.serviceDateFrom])), today);
   const claims = encs.map((e) => {
     const es = entries.filter((x) => x.encounterId === e.id);
     return {

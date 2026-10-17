@@ -84,7 +84,7 @@ function TimelineRow({ t, onDoc }: { t: TimelineItem; onDoc: (id: number) => voi
   );
 }
 
-export function Overview({ o, go, onOpenDoc, compact }: { o: O; go: (s: Section) => void; onOpenDoc: (id: number) => void; compact?: boolean }) {
+export function Overview({ o, go, onOpenDoc, compact, narrow }: { o: O; go: (s: Section) => void; onOpenDoc: (id: number) => void; compact?: boolean; narrow?: boolean }) {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<"all" | "note" | "money" | "document">("all");
   const [q, setQ] = useState("");
@@ -101,14 +101,17 @@ export function Overview({ o, go, onOpenDoc, compact }: { o: O; go: (s: Section)
   );
   const agingMax = Math.max(1, ...Object.values(o.aging).map((v) => Math.abs(v)));
   const ins = (r: number) => o.patient.insurances.find((i) => i.rank === r);
+  // Full width: all three slots. Narrower: what's on file plus the next empty slot. Compact: what's on file.
+  const showCard = (r: number) => !!ins(r) || (!compact && !narrow) || r === 1 || (!!narrow && !!ins(r - 1));
 
   return (
     <div className="space-y-5">
-      <div className={`grid gap-4 ${compact ? "grid-cols-1" : "grid-cols-1 md:grid-cols-3"}`}>
-        {[1, 2, 3].map((r) => (compact && !ins(r) && r > 1 ? null : <InsuranceCard key={r} rank={r} ins={ins(r)} onAdd={() => go("details")} />))}
+      {/* Side by side there's less room: show only the insurances on file, plus one "add" box. */}
+      <div className={`grid gap-4 ${compact ? "grid-cols-1" : narrow ? "grid-cols-2" : "grid-cols-1 md:grid-cols-3"}`}>
+        {[1, 2, 3].filter(showCard).map((r) => <InsuranceCard key={r} rank={r} ins={ins(r)} onAdd={() => go("details")} />)}
       </div>
 
-      <div className={`grid gap-5 ${compact ? "grid-cols-1" : "grid-cols-1 xl:grid-cols-[1fr_340px]"}`}>
+      <div className={`grid gap-5 ${compact || narrow ? "grid-cols-1" : "grid-cols-1 xl:grid-cols-[1fr_340px]"}`}>
         <div className="space-y-5">
           <div className="card">
             <div className="card-head">
@@ -118,24 +121,26 @@ export function Overview({ o, go, onOpenDoc, compact }: { o: O; go: (s: Section)
             {o.claims.length === 0 ? (
               <EmptyState icon={<Receipt size={20} />} title="No claims yet" action={<button className="btn btn-sm btn-primary" onClick={() => go("charge")}>Post charges</button>} />
             ) : (
+              <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-left text-2xs uppercase tracking-wider text-slate-400">
-                  <tr><th className="px-5 py-2 font-medium">Service</th><th className="font-medium">Items</th><th className="font-medium">Payer</th><th className="font-medium">Status</th><th className="text-right font-medium">Billed</th><th className="text-right font-medium">Paid</th><th className="px-5 text-right font-medium">Balance</th></tr>
+                  <tr><th className="px-5 py-2 font-medium">Service</th><th className="font-medium">Items</th>{!compact && <th className="font-medium">Payer</th>}<th className="font-medium">Status</th><th className="text-right font-medium">Billed</th>{!compact && <th className="text-right font-medium">Paid</th>}<th className="px-5 text-right font-medium">Balance</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {o.claims.map((c) => (
                     <tr key={c.id} className="cursor-pointer hover:bg-slate-50" onClick={() => go("activity")}>
                       <td className="px-5 py-2.5 text-slate-700">{isoToDisplay(c.serviceDateFrom)}</td>
                       <td className="font-mono text-xs text-slate-500">{c.codes.join(", ")}</td>
-                      <td className="max-w-[160px] truncate text-slate-600">{c.payerName}</td>
+                      {!compact && <td className="max-w-[160px] truncate text-slate-600">{c.payerName}</td>}
                       <td><Badge tone={c.status === "not_billed" ? "amber" : "green"}>{c.status === "not_billed" ? "Ready to bill" : c.status}</Badge></td>
                       <td className="text-right"><Money cents={c.billedCents} /></td>
-                      <td className="text-right"><Money cents={c.paidCents} /></td>
+                      {!compact && <td className="text-right"><Money cents={c.paidCents} /></td>}
                       <td className="px-5 text-right font-semibold"><Money cents={c.balanceCents} /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
 
@@ -185,7 +190,13 @@ export function Overview({ o, go, onOpenDoc, compact }: { o: O; go: (s: Section)
             </div>
             <div className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
               {o.lastPayment ? (
-                <span className="flex items-center gap-1.5"><Wallet size={13} className="text-green-600" /> Last payment <Money cents={o.lastPayment.amountCents} className="font-medium text-slate-800" /> on {isoToDisplay(o.lastPayment.date)}{o.lastPayment.payerName ? ` from ${o.lastPayment.payerName}` : ""}</span>
+                <div className="flex gap-2">
+                  <Wallet size={14} className="mt-0.5 shrink-0 text-green-600" />
+                  <div>
+                    <div>Last payment <Money cents={o.lastPayment.amountCents} className="font-semibold text-slate-800" /> on {isoToDisplay(o.lastPayment.date)}</div>
+                    {o.lastPayment.payerName && <div className="text-slate-400">from {o.lastPayment.payerName}{o.lastPayment.checkNumber ? ` · check ${o.lastPayment.checkNumber}` : ""}</div>}
+                  </div>
+                </div>
               ) : (
                 "No payments yet."
               )}

@@ -36,26 +36,46 @@ To stop it, click the Terminal window and press `Ctrl+C`.
 
 | Sign in as | What you can do |
 |---|---|
-| owner@caliber.test | Everything, in all 3 demo clients |
-| manager@caliber.test | Everything, in SCORE (DEMO) and Pacific (DEMO) |
-| biller@caliber.test | Register patients and post charges, in SCORE (DEMO) only |
+| owner@caliber.test | Everything, in all 3 demo clients, including Users & access, View as and Settings |
+| manager@caliber.test | Everything in SCORE (DEMO) and Pacific (DEMO) |
+| biller@caliber.test | Inbox, register patients, post charges, notes, in SCORE (DEMO) only |
 | poster@caliber.test | Post payments, in SCORE (DEMO) only |
 | auditor@caliber.test | Look only, plus the audit log |
+| portal@score-demo.test | The **client portal** for SCORE (DEMO) |
+| patient@demo.test | The **patient portal** for TEST-SCORE, PATIENT ONE |
 
-- **Find anyone fast:** press `/` anywhere, type a name, then press `Enter`.
-- **Shortcuts:** `Ctrl+R` registers a patient. `Ctrl+K` posts charges, `Ctrl+P`
-  posts a payment, and `Ctrl+L` opens the ledger. If a patient is already open,
-  these go straight to that patient. `Alt` + the same letter also works.
-- **Follow a whole claim:** register a patient, and you land on Post charges.
-  Post them, then Post a payment. The account header always says what to do
-  next.
-- **The patient workspace:** Activity (by claim, or the classic color-coded
-  ledger), Post charges, Post a payment, Patient & insurance, Notes & alerts.
-- **Alerts:** open `TEST-SCORE, PATIENT ONE` and the alert pops up straight away.
-- **Switching clients** (top of the sidebar) clears everything from the
-  previous client.
-- **Roles:** sign in as the biller and notice Post a payment is greyed out. If
-  they tried anyway, the server would refuse.
+- **Paperwork in:** open **Inbox**. Two sample items are waiting: a fax for a
+  new patient and an email for an existing one. Open one: the paper is on the
+  left, what was read is on the right (red = unsure, amber = fairly sure).
+  Pick new or existing, check the document types, tick Verified, and file it.
+  The "Sample" buttons at the top bring in more fake paperwork.
+- **The patient Overview:** all three insurances, claims, what's owed by age,
+  the ready-to-bill document checklist, alerts, follow-ups, and one history of
+  everything. Add a note with a template and a follow-up date.
+- **Many patients at once:** open several patients (press `/` each time). They
+  stay as tabs across the top and keep their place. Click **Side by side** on a
+  patient to show a second one next to it.
+- **Live updates:** sign in as the biller in a second browser (or a private
+  window) and add a note. It appears on the owner's screen by itself.
+- **Call List** (`Ctrl+O`): follow-ups from notes, overdue first.
+- **Reports:** daily activity, aging, monthly receivables, team productivity,
+  each downloadable as CSV.
+- **Settings:** note templates, drop-down lists, codes, payers, required
+  documents, providers and facilities, company info and ledger colors, API keys.
+- **View as:** Users & access → View as next to the biller. A purple bar shows
+  it's read-only. Click Leave to come back.
+- **Shortcuts:** `/` find a patient, `Ctrl+R` register, `Ctrl+K` charges,
+  `Ctrl+P` payment, `Ctrl+L` ledger, `Ctrl+O` call list. `Alt` + the same
+  letter also works.
+- **Switching clients** (top of the sidebar) closes all open patients and
+  clears everything from the previous client.
+
+## The AI reader (later)
+
+It is built but **off**. It must stay off until Caliber has a signed BAA with
+Anthropic (see `docs/VENDORS_AND_BAAS.md`). Once that's signed, the server is
+started with `CALIBER_AI_READER=anthropic`, `CALIBER_AI_BAA_CONFIRMED=yes` and
+an `ANTHROPIC_API_KEY` kept in the hosting provider's secret storage.
 
 ## Start over with fresh demo data
 

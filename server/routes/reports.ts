@@ -8,6 +8,7 @@ import { isValidIsoDate, todayIso } from "@shared/dates";
 import { formatCents } from "@shared/money";
 import { audit, requireAuth, requireClient, requirePermission } from "../middleware";
 import type { Tenant } from "../db/tenantDb";
+import { AGING_BUCKETS, ageEntries } from "../lib/aging";
 
 export const reportsRouter = Router();
 reportsRouter.use("/api/reports", requireAuth, requireClient, requirePermission("report.view"));
@@ -68,19 +69,14 @@ async function agingRows(t: Tenant, asOf: string) {
   const pts = await t.db.select().from(patients).where(isNull(patients.removedAt));
   const ins = await t.db.select().from(patientInsurances);
   const entries = await t.db.select().from(ledgerEntries).where(lte(ledgerEntries.postDate, asOf));
-  const buckets = ["0-30", "31-60", "61-90", "91-120", "121+"] as const;
+  const encDates = new Map((await t.db.select({ id: encounters.id, d: encounters.serviceDateFrom }).from(encounters)).map((e) => [e.id, e.d]));
   const rows = [];
   for (const p of pts) {
     const es = entries.filter((e) => e.patientId === p.id);
-    const r: Record<string, number | string> = { account: p.accountNumber, patient: `${p.lastName}, ${p.firstName}`, payer: ins.find((i) => i.patientId === p.id && i.rank === 1)?.payerName ?? "NONE", coverage: p.coverageType, ...Object.fromEntries(buckets.map((b) => [b, 0])), total: 0 };
-    for (const e of es) {
-      const days = Math.floor((Date.parse(asOf) - Date.parse(e.serviceDateFrom ?? e.postDate)) / 86400000);
-      const b = days <= 30 ? "0-30" : days <= 60 ? "31-60" : days <= 90 ? "61-90" : days <= 120 ? "91-120" : "121+";
-      const amt = e.insuranceDeltaCents + e.patientDeltaCents;
-      r[b] = (r[b] as number) + amt;
-      r.total = (r.total as number) + amt;
-    }
-    if (r.total !== 0) rows.push(r);
+    const aged = ageEntries(es, encDates, asOf);
+    const total = AGING_BUCKETS.reduce((s, b) => s + aged[b], 0);
+    const r: Record<string, number | string> = { account: p.accountNumber, patient: `${p.lastName}, ${p.firstName}`, payer: ins.find((i) => i.patientId === p.id && i.rank === 1)?.payerName ?? "NONE", coverage: p.coverageType, ...aged, total };
+    if (total !== 0) rows.push(r);
   }
   return rows.sort((a, b) => (b.total as number) - (a.total as number));
 }

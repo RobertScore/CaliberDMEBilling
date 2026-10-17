@@ -47,7 +47,7 @@ function PortalInvite({ id }: { id: number }) {
   );
 }
 
-export function PatientWorkspace({ id, section, compact, onClose }: { id: number; section: Section; compact?: boolean; onClose?: () => void }) {
+export function PatientWorkspace({ id, section, compact, narrow, onClose }: { id: number; section: Section; compact?: boolean; narrow?: boolean; onClose?: () => void }) {
   const nav = useNav();
   const { can } = useSession();
   const ov = useQuery({ queryKey: ["overview", id], queryFn: () => get<O>(`/api/patients/${id}/overview`) });
@@ -167,7 +167,7 @@ export function PatientWorkspace({ id, section, compact, onClose }: { id: number
       </div>
 
       <div className="mt-5">
-        {section === "overview" && <Overview o={o} go={go} onOpenDoc={openDoc} compact={compact} />}
+        {section === "overview" && <Overview o={o} go={go} onOpenDoc={openDoc} compact={compact} narrow={narrow} />}
         {section === "activity" && <LedgerSection id={id}>{(L) => <Activity L={L} />}</LedgerSection>}
         {section === "charge" && <LedgerSection id={id}>{(L) => <ChargeEntry L={L} onDone={() => go("overview")} />}</LedgerSection>}
         {section === "payment" && <LedgerSection id={id}>{(L) => <PaymentPosting L={L} onDone={() => go("overview")} />}</LedgerSection>}

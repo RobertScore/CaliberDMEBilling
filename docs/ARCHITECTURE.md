@@ -67,22 +67,68 @@ installed. Before real patient data can go in, these are **required**:
 | Databases | PGlite folders | Managed PostgreSQL, one database per client, encrypted at rest |
 | Encryption keys | Key files in `data/keys/` | Provider secret storage / key management, one key per client |
 | Sessions | In memory | Stored in the control database; `SESSION_SECRET` from secret storage |
-| Multi-factor login | **Not built yet** | Required for all staff and client admins (CLAUDE.md 3.2) |
+| Multi-factor login | **Not built yet** | Required for all staff and client admins (CLAUDE.md 3.2, Q-058) |
+| Document files | Encrypted files in `data/clients/<slug>/files/` | The client's own BAA-covered storage bucket, encrypted with the client's key |
+| AI reader | Off (demo reader or typing by hand) | Only after Caliber's BAA with Anthropic is signed (Q-054) |
 | HTTPS | Not needed on localhost | Required |
 | Code sets | Small unverified starter list | Official CMS HCPCS and ICD-10 files loaded with `npm run import:hcpcs` / `import:icd10` |
 | Backups | None | Per-client, encrypted, tested restores |
 
+## Paperwork in: the Inbox
+
+```
+fax / email gateway ─┐
+client portal upload ├─► Inbox item ─► reader (demo, AI, or none) ─► person reviews ─► filed to a NEW or EXISTING patient
+patient portal upload┤     (files encrypted                 suggests fields with          checks every value, picks the match,
+staff upload / scan ─┘      with the client's key)          a "how sure" level            sets each document's type and verifies it
+```
+
+- Files are encrypted with the client's own key before they are written
+  (`server/lib/fileStore.ts`). Every view of a file is in the audit log.
+- `server/lib/reader.ts` picks the reader. The AI reader (Claude) only runs when
+  the BAA settings are turned on. It returns values with a confidence level; the
+  review screen colors anything it wasn't sure about. Nothing is saved until a
+  person files it.
+- `server/lib/match.ts` looks for an existing patient **inside that one client
+  only** (date of birth, name, SSN last 4, phone, claim number, member ID).
+  A strong match must be explicitly dismissed before a new patient is created.
+- Each patient's **ready-to-bill checklist** compares the verified documents on
+  file with Settings → Required documents for the patient's payer types.
+
+## Many patients at once, kept current
+
+- Patients open as tabs across the top. Each one stays loaded and remembers
+  which section it was on, so switching is instant. Two can be shown side by
+  side.
+- `GET /api/events` is a live feed (Server-Sent Events) for the current client.
+  It carries only a kind and a record ID, never patient details. When a
+  teammate adds a note or posts money, everyone's open screens for that patient
+  refresh by themselves.
+
+## Users, View as and portals
+
+- Three kinds of login: Caliber staff, client portal, patient portal. Each gets
+  its own app; portal users are locked to their one client (and the patient
+  portal to one patient) on the server.
+- **View as** lets an owner or manager see exactly what another user sees. The
+  server blocks every change while it's on, and the audit log records
+  "REAL as TARGET".
+- New users and password resets get a temporary password that must be changed
+  before anything else works.
+
 ## Phase plan
 
-- **Phase 1 (this):** login, roles, client separation, Patient Entry, Ledger,
+- **Phase 1 (done):** login, roles, client separation, Patient Entry, Ledger,
   Charge Entry, Payment Posting (bulk), notes, alerts, reversals, close books,
   audit log.
-- **Phase 2:** CMS-1500 paper claims, 837P electronic claims (test mode), claim
-  status on the ledger, line-item payment posting, statements, call list,
-  scanned documents, data menus (providers, facilities, payers, fee schedules),
-  user management screen, MFA.
-- **Phase 3:** Rules library with sources, rules check on charges and claims,
+- **Phase 2 (done in this round):** patient Overview, many open patients and
+  side-by-side, note templates and follow-ups, Call List, live updates,
+  Inbox with document scanning/verification and new-vs-existing matching,
+  AI reader (off until BAA), reports with CSV, Users & access with View as,
+  Settings, client portal, patient portal, inbound paperwork API.
+- **Next:** CMS-1500 paper claims, 837P electronic claims (test mode), claim
+  status on the ledger, line-item payment posting, statements, MFA.
+- **Then:** Rules library with sources, rules check on charges and claims,
   Work Comp RFA and Second Bill Review, VA payer rules.
-- **Phase 4:** Client portal: dashboard, patients, billing status, reports.
-- **Phase 5:** CENCOM inbound API, clearinghouse connections, 835 payments,
+- **Then:** CENCOM order API, clearinghouse connections, 835 payments,
   277/999 status, eligibility.

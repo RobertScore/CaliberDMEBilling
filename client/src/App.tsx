@@ -180,7 +180,7 @@ function Workspace() {
         const where = t.id === activeId ? "main" : t.id === sideId ? "side" : "hidden";
         return (
           <div key={t.id} className={where === "main" ? "min-w-0 flex-1" : where === "side" ? "w-[42%] shrink-0 border-l border-slate-200 bg-slate-50/60" : "hidden"} style={{ order: where === "side" ? 2 : 1 }}>
-            <PatientWorkspace id={t.id} section={t.section} compact={where === "side"} onClose={where === "side" ? () => nav.setSplit(null) : undefined} />
+            <PatientWorkspace id={t.id} section={t.section} compact={where === "side"} narrow={where === "main" && sideId !== null} onClose={where === "side" ? () => nav.setSplit(null) : undefined} />
           </div>
         );
       })}

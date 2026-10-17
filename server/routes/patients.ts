@@ -213,7 +213,7 @@ patientsRouter.post("/api/patients/:id/notes", requirePermission("note.create"),
       await tx.insert(tasks).values({
         patientId: id,
         noteId: n.id,
-        title: input.body.split("\n")[0].slice(0, 120),
+        title: shortTitle(input.body),
         dueDate: input.followUpDate,
         assignedUserId: assignee.id,
         assignedInitials: assignee.initials,
@@ -229,6 +229,15 @@ patientsRouter.post("/api/patients/:id/notes", requirePermission("note.create"),
 });
 
 /** Who a follow-up goes to: the chosen teammate (must work in this client), or the person writing the note. */
+/** First line of a note, cut at a word (not mid-word) so it reads well on the Call List. */
+function shortTitle(body: string, max = 120) {
+  const line = body.split("\n")[0].trim();
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > 40 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
 export async function resolveAssignee(req: Request, userId?: number) {
   if (!userId || userId === req.user!.id) return { id: req.user!.id, initials: req.user!.initials };
   const [u] = await getControlDb().select().from(users).where(eq(users.id, userId));

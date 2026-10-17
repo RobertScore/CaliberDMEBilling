@@ -49,6 +49,9 @@ describe("intake inbox", () => {
     const file = await biller.get(`/api/documents/${detail.documents[0].id}/file`).expect(200);
     expect(file.headers["content-type"]).toBe("application/pdf");
     expect(Buffer.from(file.body).subarray(0, 5).toString()).toBe("%PDF-");
+    // The viewer frames it, but only our own pages may.
+    expect(file.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    expect(file.headers["content-security-policy"]).toContain("frame-ancestors 'self'");
   });
 
   it("spots an existing patient and refuses to create a duplicate by accident", async () => {

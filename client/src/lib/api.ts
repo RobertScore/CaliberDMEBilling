@@ -4,8 +4,17 @@ export class ApiError extends Error {
   }
 }
 
+/** fetch, but with a plain-English message when the app can't be reached at all (e.g. it was stopped in Terminal). */
+async function reach(url: string, init: RequestInit) {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new ApiError(0, "Can't reach the app. Check that it's still running in Terminal (npm run dev), then refresh this page.");
+  }
+}
+
 export async function api<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await reach(url, {
     method,
     credentials: "same-origin",
     headers: body !== undefined ? { "content-type": "application/json" } : undefined,
@@ -31,7 +40,7 @@ export async function uploadFiles<T = unknown>(url: string, files: File[], field
   const fd = new FormData();
   for (const [k, v] of Object.entries(fields)) fd.append(k, v);
   for (const f of files) fd.append("files", f);
-  const res = await fetch(url, { method: "POST", body: fd, credentials: "same-origin" });
+  const res = await reach(url, { method: "POST", body: fd, credentials: "same-origin" });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) throw new ApiError(res.status, data?.message ?? `Upload failed (${res.status})`);

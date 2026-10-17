@@ -5,6 +5,7 @@ import express from "express";
 import { createApp } from "./app";
 import { openControlDb } from "./db/control";
 import { seedDemo } from "./seed";
+import { ensureOfficialCodeSets } from "./lib/codesets";
 import { IS_PRODUCTION, PORT, DATA_DIR } from "./config";
 
 // Local settings (like ANTHROPIC_API_KEY) can live in a .env file next to package.json. It is never committed.
@@ -18,6 +19,8 @@ async function main() {
   }
   await openControlDb();
   const logins = await seedDemo();
+  // Official HCPCS and ICD-10-CM files that ship with the app (loads once; replaces the small starter list).
+  await ensureOfficialCodeSets();
 
   const app = createApp();
   if (IS_PRODUCTION) {

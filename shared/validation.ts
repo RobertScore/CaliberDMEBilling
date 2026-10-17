@@ -106,7 +106,7 @@ export const encounterInput = z
     priorAuthNumber: optText(30),
     priorAuthExpires: isoDate.optional(),
     // "A-L DX CODES ALLOWED" (spec, CHARGE ENTRY)
-    diagnosisCodes: z.array(z.string().trim().toUpperCase().regex(/^[A-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,4})?$/)).min(1).max(12),
+    diagnosisCodes: z.array(z.string().trim().toUpperCase().regex(/^[A-Z][0-9A-Z][0-9A-Z](\.[0-9A-Z]{1,4})?$/)).min(1).max(12),
     insuranceRank: z.number().int().min(1).max(3).default(1),
     lines: z.array(serviceLineInput).min(1).max(20),
   })

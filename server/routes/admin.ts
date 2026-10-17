@@ -11,6 +11,9 @@ import { DOC_TYPES } from "@shared/documents";
 import { ROLE_LABELS, rolesAssignableBy, type Role } from "@shared/permissions";
 import { getControlDb } from "../db/control";
 import { LISTS, listItems, type ListName } from "../lib/lists";
+import { codeSetStatus, updateFromOfficialSources } from "../lib/codesets";
+import { codeSearch } from "./codes";
+import { todayIso } from "@shared/dates";
 import { HttpError, audit, requireAuth, requireClient, requirePermission, userCanAccessClient } from "../middleware";
 import { loadPatientOr404 } from "./patients";
 
@@ -271,12 +274,32 @@ const codeTables = { hcpcs: hcpcsCodes, icd10: icd10Codes, modifiers } as const;
 settings.get("/codes/:kind", async (req, res) => {
   const kind = req.params.kind as keyof typeof codeTables;
   if (!(kind in codeTables)) throw new HttpError(404, "Unknown code set");
-  const q = typeof req.query.q === "string" ? req.query.q.trim().replace(/[%_]/g, "").slice(0, 40) : "";
+  const q = typeof req.query.q === "string" ? req.query.q.trim().replace(/[%_\\]/g, "").slice(0, 60) : "";
   const db = getControlDb();
   if (kind === "modifiers") return res.json(await db.select().from(modifiers).where(q ? or(ilike(modifiers.code, `${q}%`), ilike(modifiers.description, `%${q}%`)) : undefined).orderBy(asc(modifiers.code)));
-  if (kind === "hcpcs") return res.json(await db.select().from(hcpcsCodes).where(q ? or(ilike(hcpcsCodes.code, `${q}%`), ilike(hcpcsCodes.shortDescription, `%${q}%`)) : undefined).orderBy(asc(hcpcsCodes.code)).limit(200));
-  res.json(await db.select().from(icd10Codes).where(q ? or(ilike(icd10Codes.code, `${q}%`), ilike(icd10Codes.description, `%${q}%`)) : undefined).orderBy(asc(icd10Codes.code)).limit(200));
+  // Settings shows retired codes too (with their end dates), so all=true.
+  if (kind === "hcpcs") {
+    const s = codeSearch({ code: hcpcsCodes.code, texts: [hcpcsCodes.shortDescription, hcpcsCodes.longDescription], from: hcpcsCodes.effectiveFrom, to: hcpcsCodes.effectiveTo }, q, todayIso(), true);
+    return res.json(await db.select().from(hcpcsCodes).where(s.where).orderBy(s.order, asc(hcpcsCodes.code)).limit(200));
+  }
+  const s = codeSearch({ code: icd10Codes.code, texts: [icd10Codes.description, icd10Codes.shortDescription], from: icd10Codes.effectiveFrom, to: icd10Codes.effectiveTo }, q, todayIso(), true);
+  res.json(await db.select().from(icd10Codes).where(s.where).orderBy(s.order, asc(icd10Codes.code), asc(icd10Codes.effectiveFrom)).limit(200));
 });
+
+// Official code-set files: what's loaded, and fetching updates from CMS / CDC (runs in the background).
+const codeUpdate = { running: false, log: [] as string[], error: null as string | null, finishedAt: null as string | null };
+settings.get("/code-sets", async (_req, res) => res.json({ ...(await codeSetStatus()), update: codeUpdate }));
+settings.post("/code-sets/update", async (req, res) => {
+  if (!codeUpdate.running) {
+    Object.assign(codeUpdate, { running: true, log: [], error: null, finishedAt: null });
+    const who = `${req.user!.name} (${req.user!.initials})`;
+    void updateFromOfficialSources(who, (m) => codeUpdate.log.push(m))
+      .catch((e: Error) => { codeUpdate.error = `The update stopped: ${e.message}. Nothing partial was saved for that file.`; })
+      .finally(() => Object.assign(codeUpdate, { running: false, finishedAt: new Date().toISOString() }));
+  }
+  res.status(202).json({ update: codeUpdate });
+});
+
 const codeInput = z.object({ code: z.string().trim().toUpperCase().min(2).max(10), description: z.string().trim().min(1).max(300), effectiveFrom: z.string().optional(), effectiveTo: z.string().nullable().optional() }).strict();
 settings.post("/codes/:kind", async (req, res) => {
   const kind = req.params.kind;
@@ -292,7 +315,7 @@ settings.post("/codes/:kind", async (req, res) => {
     return res.status(201).json((await db.insert(hcpcsCodes).values({ code: input.code, shortDescription: input.description, effectiveFrom: input.effectiveFrom ?? null, source }).returning())[0]);
   }
   if (kind === "icd10") {
-    if (!/^[A-Z]\d[0-9A-Z](\.[0-9A-Z]{1,4})?$/.test(input.code)) throw new HttpError(400, "ICD-10 codes look like M25.561");
+    if (!/^[A-Z][0-9A-Z][0-9A-Z](\.[0-9A-Z]{1,4})?$/.test(input.code)) throw new HttpError(400, "ICD-10 codes look like M25.561");
     return res.status(201).json((await db.insert(icd10Codes).values({ code: input.code, description: input.description, effectiveFrom: input.effectiveFrom ?? null, source }).returning())[0]);
   }
   throw new HttpError(404, "Unknown code set");
@@ -303,6 +326,11 @@ settings.patch("/codes/:kind/:codeId", async (req, res) => {
   const input = z.object({ description: z.string().trim().min(1).max(300).optional(), effectiveTo: z.string().nullable().optional() }).strict().parse(req.body);
   const db = getControlDb();
   const id = idOf(req.params.codeId);
+  // Official CMS / CDC codes only change through a new official file.
+  const table = kind === "hcpcs" ? hcpcsCodes : kind === "icd10" ? icd10Codes : modifiers;
+  const [row] = await db.select({ source: table.source }).from(table).where(eq(table.id, id));
+  if (!row) throw new HttpError(404, "Code not found");
+  if (/^(CMS|CDC)/.test(row.source)) throw new HttpError(400, "Official codes come from the CMS / CDC files and can't be changed by hand.");
   if (kind === "hcpcs") await db.update(hcpcsCodes).set({ ...(input.description ? { shortDescription: input.description } : {}), ...(input.effectiveTo !== undefined ? { effectiveTo: input.effectiveTo } : {}) }).where(eq(hcpcsCodes.id, id));
   else if (kind === "icd10") await db.update(icd10Codes).set({ ...(input.description ? { description: input.description } : {}), ...(input.effectiveTo !== undefined ? { effectiveTo: input.effectiveTo } : {}) }).where(eq(icd10Codes.id, id));
   else if (kind === "modifiers" && input.description) await db.update(modifiers).set({ description: input.description }).where(eq(modifiers.id, id));

@@ -86,6 +86,9 @@ export const icd10Codes = pgTable(
     id: serial("id").primaryKey(),
     code: text("code").notNull(),
     description: text("description").notNull(),
+    shortDescription: text("short_description"),
+    // false for category "headers" (e.g. S83.5): not valid on a claim, a more specific code is required.
+    billable: boolean("billable").notNull().default(true),
     effectiveFrom: date("effective_from"),
     effectiveTo: date("effective_to"),
     source: text("source").notNull(),
@@ -98,7 +101,25 @@ export const modifiers = pgTable("modifiers", {
   id: serial("id").primaryKey(),
   code: text("code").notNull().unique(),
   description: text("description").notNull(),
+  effectiveFrom: date("effective_from"),
+  effectiveTo: date("effective_to"),
   source: text("source").notNull(),
+});
+
+// Every load of an official code-set file: what, from where, which exact file, when, and what changed.
+export const codeSetLoads = pgTable("code_set_loads", {
+  id: serial("id").primaryKey(),
+  codeSet: text("code_set").notNull(), // hcpcs | icd10cm
+  version: text("version").notNull(), // e.g. "2026-10" (HCPCS quarter) or "FY2027"
+  effectiveFrom: date("effective_from").notNull(),
+  sourceUrl: text("source_url").notNull(),
+  fileName: text("file_name").notNull(),
+  sha256: text("sha256").notNull(),
+  added: integer("added").notNull(),
+  changed: integer("changed").notNull(),
+  retired: integer("retired").notNull(),
+  loadedAt: timestamp("loaded_at", { withTimezone: true }).notNull().defaultNow(),
+  loadedBy: text("loaded_by").notNull(),
 });
 
 // Which documents each payer type needs before an order is "ready to bill".

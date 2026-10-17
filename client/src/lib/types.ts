@@ -56,7 +56,7 @@ export interface Insurance {
 }
 
 export interface Payer { id: number; name: string; payerType: string; state: string | null }
-export interface Code { code: string; shortDescription?: string; description?: string; source: string }
+export interface Code { code: string; shortDescription?: string | null; longDescription?: string | null; description?: string; billable?: boolean; effectiveFrom?: string | null; effectiveTo?: string | null; source: string }
 
 export interface LedgerEntry {
   id: number;

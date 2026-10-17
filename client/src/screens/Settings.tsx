@@ -126,7 +126,63 @@ function Lists() {
 }
 
 // ---- Codes ----------------------------------------------------------------------------
-type CodeRow = { id: number; code: string; shortDescription?: string; description?: string; effectiveFrom?: string | null; effectiveTo?: string | null; source?: string };
+type CodeRow = { id: number; code: string; shortDescription?: string | null; longDescription?: string | null; description?: string; billable?: boolean; effectiveFrom?: string | null; effectiveTo?: string | null; source?: string };
+type Load = { id: number; codeSet: string; version: string; effectiveFrom: string; sourceUrl: string; fileName: string; sha256: string; added: number; changed: number; retired: number; loadedAt: string; loadedBy: string };
+type CodeSetStatus = { loads: Load[]; counts: { hcpcs: number; icd10: number; icd10BillableNow: number; modifiers: number }; update: { running: boolean; log: string[]; error: string | null; finishedAt: string | null } };
+
+/** What's loaded from CMS / CDC, and a button to fetch newer official files. */
+function CodeSetPanel() {
+  const qc = useQueryClient();
+  const st = useQuery({ queryKey: ["settings", "code-sets"], queryFn: () => get<CodeSetStatus>("/api/settings/code-sets"), refetchInterval: (x) => (x.state.data?.update.running ? 1500 : false) });
+  const start = useMutation({ mutationFn: () => post("/api/settings/code-sets/update"), onSuccess: () => qc.invalidateQueries({ queryKey: ["settings", "code-sets"] }) });
+  const d = st.data;
+  const latest = (set: string) => d?.loads.find((l) => l.codeSet === set);
+  const u = d?.update;
+  return (
+    <div className="card mb-4 p-4">
+      <div className="flex flex-wrap items-start gap-4">
+        <div className="min-w-0 flex-1 text-sm">
+          <div className="font-semibold text-slate-900">Official code sets</div>
+          <div className="mt-1 text-slate-600">
+            HCPCS: <b>{d?.counts.hcpcs.toLocaleString() ?? "…"}</b> codes and <b>{d?.counts.modifiers ?? "…"}</b> modifiers, from CMS{latest("hcpcs") ? ` (${latest("hcpcs")!.version} quarterly file)` : ""}.
+            {" "}ICD-10-CM: <b>{d?.counts.icd10BillableNow.toLocaleString() ?? "…"}</b> billable codes in effect now, from CDC/NCHS{latest("icd10cm") ? ` (${latest("icd10cm")!.version})` : ""}.
+          </div>
+          <div className="mt-1 text-xs text-slate-500">HCPCS is updated by CMS every quarter (January, April, July, October). ICD-10-CM changes every October 1. Older codes are kept with end dates so older claims still check correctly.</div>
+        </div>
+        <button className="btn btn-primary btn-sm" disabled={u?.running || start.isPending} onClick={() => start.mutate()}>
+          {u?.running ? "Checking…" : "Check CMS/CDC for updates"}
+        </button>
+      </div>
+      {u && (u.running || u.log.length > 0 || u.error) && (
+        <div className="mt-3 rounded-lg bg-slate-50 p-3 font-mono text-xs text-slate-700">
+          {u.log.map((l, i) => <div key={i}>{l}</div>)}
+          {u.error && <div className="text-red-600">{u.error}</div>}
+        </div>
+      )}
+      <ErrorBox error={start.error ?? st.error} />
+      {!!d?.loads.length && (
+        <details className="mt-3 text-xs">
+          <summary className="cursor-pointer text-slate-500">Load history ({d.loads.length})</summary>
+          <table className="mt-2 w-full">
+            <thead className="text-left text-slate-400"><tr><th className="py-1 font-medium">Loaded</th><th className="font-medium">Set</th><th className="font-medium">Version</th><th className="font-medium">Added / changed / retired</th><th className="font-medium">Source</th><th className="font-medium">By</th></tr></thead>
+            <tbody className="text-slate-600">
+              {d.loads.map((l) => (
+                <tr key={l.id} className="border-t border-slate-100">
+                  <td className="py-1">{new Date(l.loadedAt).toLocaleString()}</td>
+                  <td>{l.codeSet === "hcpcs" ? "HCPCS" : "ICD-10-CM"}</td>
+                  <td>{l.version} (from {l.effectiveFrom})</td>
+                  <td>{l.added.toLocaleString()} / {l.changed} / {l.retired}</td>
+                  <td className="max-w-[320px] truncate" title={`${l.fileName}\nSHA-256 ${l.sha256}`}><a className="text-navy-700 hover:underline" href={l.sourceUrl} target="_blank" rel="noreferrer">{l.sourceUrl.replace(/^https:\/\//, "")}</a></td>
+                  <td>{l.loadedBy}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+    </div>
+  );
+}
 function Codes() {
   const saved = useSaved();
   const [kind, setKind] = useState<"hcpcs" | "icd10" | "modifiers">("hcpcs");
@@ -144,7 +200,8 @@ function Codes() {
         ))}
         <input className="input ml-auto h-8 w-64 text-xs" placeholder="Search code or description…" value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
-      <div className="mb-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">Official code sets are loaded from CMS files (see the code import script). Add a code here only if it's missing from the official file; it's marked “Added in Settings”. Codes are never deleted, because old claims need them. Retire one by ending it. CPT is not loaded (needs an AMA license).</div>
+      <CodeSetPanel />
+      <div className="mb-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">Official codes come straight from the CMS and CDC files and can't be edited here. Add a code by hand only if it's missing from the official file; it's marked “Added in Settings” and can be ended later. Codes are never deleted, because old claims need them. CPT is not loaded (it needs an AMA license).</div>
       <div className="card overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-slate-50/80 text-left text-xs text-slate-500"><tr><th className="px-5 py-2.5 font-medium">Code</th><th className="font-medium">Description</th><th className="font-medium">Dates</th><th className="font-medium">Source</th><th className="px-5" /></tr></thead>
@@ -152,10 +209,13 @@ function Codes() {
             {q.data?.map((r) => (
               <tr key={r.id} className={r.effectiveTo ? "opacity-50" : ""}>
                 <td className="px-5 py-2 font-mono text-xs">{r.code}</td>
-                <td className="text-slate-700">{r.shortDescription ?? r.description}</td>
+                <td className="text-slate-700">
+                  {r.longDescription ?? r.description ?? r.shortDescription}
+                  {r.billable === false && <span className="ml-1.5 rounded bg-slate-100 px-1 text-[10px] text-slate-600">category, not billable</span>}
+                </td>
                 <td className="whitespace-nowrap text-xs text-slate-500">{r.effectiveFrom ?? "—"} → {r.effectiveTo ?? "open"}</td>
                 <td className="max-w-[200px] truncate text-xs text-slate-400">{r.source}</td>
-                <td className="px-5 text-right">{kind !== "modifiers" && <button className="btn btn-ghost btn-sm" onClick={() => retire.mutate(r)}>{r.effectiveTo ? "Reopen" : "End today"}</button>}</td>
+                <td className="px-5 text-right">{kind !== "modifiers" && r.source?.startsWith("Added") && <button className="btn btn-ghost btn-sm" onClick={() => retire.mutate(r)}>{r.effectiveTo ? "Reopen" : "End today"}</button>}</td>
               </tr>
             ))}
           </tbody>

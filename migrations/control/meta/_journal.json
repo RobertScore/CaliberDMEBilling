@@ -15,6 +15,13 @@
       "when": 1792193617803,
       "tag": "0001_documents_portals_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792247563327,
+      "tag": "0002_code_set_versions",
+      "breakpoints": true
     }
   ]
 }

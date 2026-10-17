@@ -8,6 +8,7 @@ import { findItem } from "../lib/lists";
 import { publish } from "../lib/events";
 import { todayIso } from "@shared/dates";
 import { sumCents } from "@shared/money";
+import { codeProblems } from "../lib/codesets";
 import { HttpError, audit, requireAuth, requireClient, requirePermission } from "../middleware";
 import { loadPatientOr404 } from "./patients";
 
@@ -79,6 +80,9 @@ ledgerRouter.post("/api/patients/:id/encounters", requirePermission("charge.post
   const id = idParam(req);
   await loadPatientOr404(req, id);
   const input = encounterInput.parse(req.body);
+  // Codes must be valid on the date of service (code sets are versioned by date, CLAUDE.md 3.4 / 6).
+  const problems = await codeProblems(input.serviceDateFrom, { hcpcs: input.lines.map((l) => l.hcpcsCode), modifiers: input.lines.flatMap((l) => l.modifiers), icd10: input.diagnosisCodes });
+  if (problems.length) throw new HttpError(400, problems.join(" "));
   const postDate = todayIso();
   await assertOpenPeriod(req, postDate);
   const [policy] = await req.tenant!.db

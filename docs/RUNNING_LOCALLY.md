@@ -94,6 +94,15 @@ unless Caliber's BAA with Anthropic is signed. On the real (production) server
 it also refuses to run unless `CALIBER_AI_BAA_CONFIRMED=yes` is set, as a
 second safety net.
 
+## Code sets (HCPCS and ICD-10)
+
+The first time the app starts with a new data folder it loads all official codes from the files in
+`codesets/official/` (about 8,800 HCPCS codes, 384 modifiers and 98,000 ICD-10-CM rows). That adds about
+30 seconds to that one start; Terminal says "Loading official … codes".
+
+To get newer codes later (HCPCS changes every quarter, ICD-10-CM every October 1): Settings → Codes →
+**Check CMS/CDC for updates**. Or, with the app stopped, `npm run codes:update`.
+
 ## Start over with fresh demo data
 
 ```

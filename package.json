@@ -14,8 +14,7 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate --config drizzle.control.config.ts && drizzle-kit generate --config drizzle.tenant.config.ts",
     "reset-demo": "tsx scripts/reset-demo.ts",
-    "import:hcpcs": "tsx scripts/import-hcpcs.ts",
-    "import:icd10": "tsx scripts/import-icd10.ts"
+    "codes:update": "tsx scripts/update-codesets.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.135.0",
@@ -25,6 +24,7 @@
     "drizzle-orm": "^0.45.4",
     "express": "^5.3.0",
     "express-session": "^1.19.0",
+    "fflate": "^0.8.2",
     "lucide-react": "^1.58.0",
     "multer": "^2.4.0",
     "pdf-lib": "^1.17.1",

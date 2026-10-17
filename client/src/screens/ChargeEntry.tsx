@@ -127,6 +127,7 @@ export function ChargeEntry({ L, onDone }: { L: LedgerView; onDone: () => void }
               <CodeLookup
                 key={dxKey}
                 kind="icd10"
+                on={from}
                 value=""
                 className="w-56"
                 placeholder={dx.length ? "Add another…" : "e.g. M25.561 or knee pain"}
@@ -150,7 +151,7 @@ export function ChargeEntry({ L, onDone }: { L: LedgerView; onDone: () => void }
                   <span className="mt-2 w-5 text-xs font-semibold text-slate-400">{idx + 1}</span>
                   <div className="grid flex-1 grid-cols-12 gap-3">
                     <Field label="HCPCS" className="col-span-3">
-                      <CodeLookup kind="hcpcs" value={l.hcpcsCode} placeholder="E0218" onPick={(code, desc) => setLine(l.key, { hcpcsCode: code, ...(desc ? { description: desc.toUpperCase() } : {}) })} />
+                      <CodeLookup kind="hcpcs" on={from} value={l.hcpcsCode} placeholder="E0218" onPick={(code, desc) => setLine(l.key, { hcpcsCode: code, ...(desc ? { description: desc.toUpperCase() } : {}) })} />
                     </Field>
                     <Field label="Description" className="col-span-9">
                       <TextInput value={l.description} onChange={(v) => setLine(l.key, { description: v })} maxLength={120} upper />
@@ -248,7 +249,7 @@ export function ChargeEntry({ L, onDone }: { L: LedgerView; onDone: () => void }
             {submit.isPending ? "Posting…" : `Post charges${total ? ` · $${formatCents(total)}` : ""}`}
           </button>
           <div className="mt-3"><ErrorBox error={submit.error} /></div>
-          <p className="mt-3 text-2xs leading-relaxed text-slate-400">Codes tagged “starter list” are a small unverified sample. Load the official CMS files before real billing.</p>
+          <p className="mt-3 text-2xs leading-relaxed text-slate-400">Codes are checked against the official CMS (HCPCS) and CDC (ICD-10-CM) lists in effect on the date of service.</p>
         </div>
       </aside>
     </div>

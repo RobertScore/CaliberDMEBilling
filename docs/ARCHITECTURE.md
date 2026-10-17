@@ -71,8 +71,24 @@ installed. Before real patient data can go in, these are **required**:
 | Document files | Encrypted files in `data/clients/<slug>/files/` | The client's own BAA-covered storage bucket, encrypted with the client's key |
 | AI reader | Off (demo reader or typing by hand) | Only after Caliber's BAA with Anthropic is signed (Q-054) |
 | HTTPS | Not needed on localhost | Required |
-| Code sets | Small unverified starter list | Official CMS HCPCS and ICD-10 files loaded with `npm run import:hcpcs` / `import:icd10` |
+| Code sets | Official files bundled in `codesets/official/` load on first start | Same, plus Settings → Codes → "Check CMS/CDC for updates" each quarter |
 | Backups | None | Per-client, encrypted, tested restores |
+
+## Code sets (HCPCS, modifiers, ICD-10-CM)
+
+- The official files ship in `codesets/official/`, byte-for-byte as published (CMS quarterly HCPCS file;
+  CDC/NCHS ICD-10-CM code descriptions). `manifest.json` lists each file's source URL and SHA-256.
+- `server/lib/codesets.ts` reads them using the record layouts published with them, and loads them once at
+  start-up. Every load is recorded in `code_set_loads` (file, URL, fingerprint, when, by whom, how many codes
+  were added / changed / retired).
+- Nothing is deleted. HCPCS codes carry CMS's added and termination dates. ICD-10-CM is versioned by fiscal
+  year: a changed code gets a new row from October 1 and the old row an end date; a retired code gets an end
+  date. Category "headers" are kept for search but marked not billable.
+- Charge entry checks every HCPCS code, modifier and ICD-10-CM code against the date of service. Code search
+  only offers codes valid on that date.
+- Updates: Settings → Codes → "Check CMS/CDC for updates" (or `npm run codes:update` with the app stopped)
+  downloads anything newer from cms.gov and ftp.cdc.gov and loads it the same way.
+- CPT is not loaded (AMA license). The CMS file used contains no CPT codes.
 
 ## Paperwork in: the Inbox
 

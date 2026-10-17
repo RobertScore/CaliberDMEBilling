@@ -1,0 +1,26 @@
+[
+  {
+    "codeSet": "icd10cm",
+    "version": "FY2026",
+    "effectiveFrom": "2025-10-01",
+    "sourceUrl": "https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2026/icd10cm-Code%20Descriptions-2026.zip",
+    "file": "icd10cm-code-descriptions-2026.zip",
+    "sha256": "a852eb91b3344ae38476e63816976ee1eeb94dcced7151118324f060e8499f88"
+  },
+  {
+    "codeSet": "icd10cm",
+    "version": "FY2027",
+    "effectiveFrom": "2026-10-01",
+    "sourceUrl": "https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/icd10cm-code-descriptions-2027.zip",
+    "file": "icd10cm-code-descriptions-2027.zip",
+    "sha256": "93e3ad6004badf470c55bfe679b748ae88fd9b2b421851e409eec382c7713b9a"
+  },
+  {
+    "codeSet": "hcpcs",
+    "version": "2026-10",
+    "effectiveFrom": "2026-10-01",
+    "sourceUrl": "https://www.cms.gov/files/zip/october-2026-alpha-numeric-hcpcs-file.zip",
+    "file": "october-2026-alpha-numeric-hcpcs-file.zip",
+    "sha256": "08c2202fa92c1d1fb6f31b808b61c767bc487954f6930b6a0f8d09c89af5992f"
+  }
+]

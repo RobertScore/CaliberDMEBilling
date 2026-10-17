@@ -166,5 +166,6 @@ export const taskInput = z
 export const alertInput = z.object({ body: z.string().trim().min(1).max(500) }).strict();
 export const reverseInput = z.object({ reason: z.string().trim().min(3).max(200) }).strict();
 export const periodCloseInput = z.object({ closedThrough: isoDate }).strict();
-export const loginInput = z.object({ email: z.string().trim().toLowerCase().max(120), password: z.string().min(1).max(200) }).strict();
+// Spaces before or after the password are ignored (they sneak in when copying it); passwords can't start or end with one.
+export const loginInput = z.object({ email: z.string().trim().toLowerCase().max(120), password: z.string().trim().min(1).max(200) }).strict();
 export const switchClientInput = z.object({ clientId: z.number().int().positive() }).strict();

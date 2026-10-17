@@ -30,12 +30,13 @@ const strongPassword = z
   .string()
   .min(12, "Use at least 12 characters")
   .max(200)
-  .refine((p) => /[A-Za-z]/.test(p) && /\d/.test(p), "Use letters and at least one number");
+  .refine((p) => /[A-Za-z]/.test(p) && /\d/.test(p), "Use letters and at least one number")
+  .refine((p) => p === p.trim(), "Don't start or end the password with a space");
 
 // ---- Passwords ------------------------------------------------------------------------
 
 adminRouter.post("/api/auth/change-password", requireAuth, async (req, res) => {
-  const { currentPassword, newPassword } = z.object({ currentPassword: z.string().min(1), newPassword: strongPassword }).strict().parse(req.body);
+  const { currentPassword, newPassword } = z.object({ currentPassword: z.string().trim().min(1), newPassword: strongPassword }).strict().parse(req.body);
   if (req.realUser) throw new HttpError(403, "Not while viewing as someone else");
   const db = getControlDb();
   const [u] = await db.select().from(users).where(eq(users.id, req.user!.id));

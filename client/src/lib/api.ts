@@ -24,7 +24,8 @@ export async function api<T = unknown>(method: string, url: string, body?: unkno
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) {
     // Logged out (e.g. timed out) while using a screen: go back to the login page.
-    if (res.status === 401 && url !== "/api/session") window.dispatchEvent(new Event("cdb:logged-out"));
+    // (Not for the session check or a failed sign-in: the login screen shows that message itself.)
+    if (res.status === 401 && url !== "/api/session" && !url.startsWith("/api/auth/")) window.dispatchEvent(new Event("cdb:logged-out"));
     throw new ApiError(res.status, data?.message ?? `Request failed (${res.status})`);
   }
   return data as T;

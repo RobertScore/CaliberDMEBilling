@@ -37,7 +37,7 @@ export function Login({ onLoggedIn }: { onLoggedIn: () => void }) {
             setBusy(true);
             setError(null);
             try {
-              await post("/api/auth/login", { email, password });
+              await post("/api/auth/login", { email: email.trim(), password: password.trim() });
               onLoggedIn();
             } catch (err) {
               setError((err as Error).message);

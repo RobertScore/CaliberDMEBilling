@@ -28,7 +28,16 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 // ---- What the reader (AI, demo, or a person) produces ----------------------------------
 // Every value carries a confidence so the review screen can highlight what needs a closer look.
 const conf = z.enum(["high", "medium", "low"]);
-const field = z.object({ value: z.string().nullable(), confidence: conf });
+// Where on the paper a value was read: which file (0-based, in upload order), which page (1-based) and,
+// when the reader can tell, a box around the writing as fractions of the page (0 = left/top, 1 = right/bottom).
+// The box is approximate; it's for jumping the viewer to the right spot, not a measurement.
+const where = z.object({
+  file: z.number().int(),
+  page: z.number().int(),
+  box: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).nullable(),
+});
+const field = z.object({ value: z.string().nullable(), confidence: conf, where: where.nullable() });
+export type FieldWhere = z.infer<typeof where>;
 
 export const extractedInsurance = z.object({
   rank: z.number().int().min(1).max(3),
@@ -99,4 +108,4 @@ export const sectionInput = z
   .refine((s) => s.toPage >= s.fromPage, "A section's last page can't come before its first page");
 export type SectionInput = z.infer<typeof sectionInput>;
 
-export const emptyField = (): ExtractedField => ({ value: null, confidence: "low" });
+export const emptyField = (): ExtractedField => ({ value: null, confidence: "low", where: null });

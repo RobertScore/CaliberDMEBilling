@@ -113,6 +113,17 @@ staff upload / scan ─┘      with the client's key)          a "how sure" lev
   the reviewer adjusts them. On filing, each part is cut into its own PDF (`server/lib/pdfPages.ts`,
   pdf-lib, runs on our server) and filed to the patient. The full packet stays with the Inbox item, never
   on the patient's file, so a misfiled page about someone else can't end up in this patient's documents.
+- **Parts run first page to last page.** The reader is asked to group pages into whole documents
+  (a 4-page RFA is one part, not four). The review screen joins neighboring pages of the same type into
+  one part, shows a colored page map, and lets the reviewer split, join, retype or set aside a part.
+- **Where each value came from.** Every field the AI fills carries `where` (file, page, and an
+  approximate box on the page, as fractions of the page size). On the review screen AI-filled boxes have
+  a purple outline; clicking one scrolls the document (drawn in the browser by pdf.js, `PageViewer.tsx`)
+  to that page and highlights the spot. Enter or the check button marks it as matching the paper (green);
+  changing it turns it amber and keeps "AI read: …" under the box. The box is the AI's estimate, so it can
+  be a little off. On filing, each field's outcome (checked, corrected, not checked) is stored on the Inbox
+  item (`intake_items.field_review`) and the account note gets the counts only, so we can measure the AI's
+  accuracy over time.
 - **Existing patients and insurance slots.** When paperwork is filed to an existing patient, each
   insurance read from it goes where the reviewer chooses: a new claim in an empty slot, an update to a
   claim on file (new values laid over old), a full replacement, or not saved.

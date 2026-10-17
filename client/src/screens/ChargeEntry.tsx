@@ -170,10 +170,10 @@ export function ChargeEntry({ L, onDone }: { L: LedgerView; onDone: () => void }
                             </button>
                           );
                         })}
-                        <select className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-600" value="" disabled={l.modifiers.length >= 4}
+                        <select className="h-8 w-44 max-w-full rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-600" value="" disabled={l.modifiers.length >= 4} title="Other modifiers"
                           onChange={(e) => e.target.value && setLine(l.key, { modifiers: [...l.modifiers, e.target.value] })}>
                           <option value="">More…</option>
-                          {mods.data?.filter((m) => !QUICK_MODS.includes(m.code) && !l.modifiers.includes(m.code)).map((m) => <option key={m.code} value={m.code}>{m.code}: {m.description}</option>)}
+                          {mods.data?.filter((m) => !QUICK_MODS.includes(m.code) && !l.modifiers.includes(m.code)).map((m) => <option key={m.code} value={m.code} title={m.description}>{m.code}: {m.description.length > 60 ? `${m.description.slice(0, 60)}…` : m.description}</option>)}
                         </select>
                       </div>
                     </div>

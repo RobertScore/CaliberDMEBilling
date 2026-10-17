@@ -51,11 +51,19 @@ Extract only what is actually written. Never guess or fill in a value that isn't
 - payerTypeGuess: WC for workers' comp carriers/TPAs; VA_DIRECT for the VA itself; VA_CCN for VA community care
   administrators; otherwise MEDICARE, MEDICAID, COMMERCIAL, SELF_PAY or UNKNOWN.
 - For each file (in the order given, index from 0) give the best document type from: ${DOC_TYPES.map((d) => d.code).join(", ")}.
-- sections: split every file into its separate documents by page (pages numbered from 1 within each file, ranges
-  inclusive, no overlaps, every page in exactly one section). Use the same document types (never "packet").
-  belongsTo: "this_patient" for the patient's own documents, "other_patient" for a page about someone else,
-  "none" for fax cover sheets, blank pages, ads and surveys. A duplicate page is its own section with a summary
-  saying it's a duplicate. An upside-down page still gets a section.`;
+- where: for every value you fill in, say where you read it: file (0-based, in the order given), page (1-based
+  within that file) and box = the area around the writing as fractions of the page: x and y of the top-left
+  corner, then width w and height h, each from 0 to 1 (0,0 = top-left of the page). Give your best estimate of
+  the box; use null for box only if you can't tell. If the value is on several pages, point to the clearest one.
+  Use where = null only when the value is null.
+- sections: split every file into its separate documents. A document runs from its FIRST page to its LAST page:
+  a 3-page RFA, a 6-page set of chart notes or a 4-page MRI report is ONE section (e.g. pages 4-6), not one
+  section per page. Start a new section only where a different document begins (a new form, letterhead, title,
+  date of service or patient). Pages are numbered from 1 within each file; ranges are inclusive, don't overlap,
+  and every page is in exactly one section. Use the same document types (never "packet").
+  belongsTo: "this_patient" for the patient's own documents, "other_patient" for pages about someone else,
+  "none" for fax cover sheets, blank pages, ads and surveys. A duplicate copy of a document is its own section
+  with a summary saying it's a duplicate. An upside-down page still belongs to its document.`;
 
 let client: Anthropic | null = null;
 

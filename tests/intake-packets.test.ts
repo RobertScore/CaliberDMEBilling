@@ -119,3 +119,48 @@ describe("insurance slots when filing to an existing patient", () => {
     expect(replaced.insurances.find((i) => i.rank === 2)).toMatchObject({ claimNumber: "TEST-OTHER-CLAIM", adjusterName: null, authorizationNumber: null });
   });
 });
+
+describe("checking what the AI read", () => {
+  it("the demo reader says where on the page each value came from", async () => {
+    const { demoPacket, demoExtraction } = await import("../server/lib/demoPaperwork");
+    const { sha256 } = await import("../server/lib/fileStore");
+    const p = demoPacket("new", "TEST");
+    const e = demoExtraction([sha256(p.pdf)])!;
+    const last = e.patient.lastName;
+    expect(last.value).toBeTruthy();
+    expect(last.where).toMatchObject({ file: 0 });
+    expect(last.where!.page).toBeGreaterThanOrEqual(1);
+    const b = last.where!.box!;
+    for (const v of [b.x, b.y, b.w, b.h]) expect(v >= 0 && v <= 1).toBe(true);
+  });
+
+  it("stores how each AI field ended up and notes the counts (not the values) on the account", async () => {
+    const biller = await login(ctx.app, "biller@caliber.test", ctx.score);
+    const item = await uploadPacket(biller, 1);
+    const fieldReview = [
+      { field: "lastName", label: "Last name", aiValue: "TEST-REVIEW", finalValue: "TEST-REVIEW", confidence: "high", outcome: "checked" },
+      { field: "firstName", label: "First name", aiValue: "PACKIT", finalValue: "PACKET", confidence: "low", outcome: "edited" },
+      { field: "phone", label: "Phone", aiValue: "5550000001", finalValue: "5550000001", confidence: "medium", outcome: "ai" },
+    ];
+    const r = await biller.post(`/api/intake/${item.id}/complete`)
+      .send({ decision: "new", patient: newPatient("TEST-REVIEW"), documents: [{ id: item.documents[0].id, docType: "other", verified: false }], fieldReview })
+      .expect(200);
+    const notes = (await biller.get(`/api/patients/${r.body.patientId}/notes`).expect(200)).body;
+    expect(notes[0].body).toContain("AI read 3 fields: 1 checked as right, 1 corrected, 1 not checked.");
+    expect(notes[0].body).not.toContain("PACKIT");
+    const { getTenant } = await import("../server/db/tenantDb");
+    const tenant = (await getTenant(ctx.score, "score-demo")).db;
+    const { intakeItems } = await import("../shared/schema/tenant");
+    const { eq } = await import("drizzle-orm");
+    const [row] = await tenant.select().from(intakeItems).where(eq(intakeItems.id, item.id));
+    expect(row.fieldReview).toEqual(fieldReview);
+  });
+
+  it("rejects a review with an unknown outcome", async () => {
+    const biller = await login(ctx.app, "biller@caliber.test", ctx.score);
+    const item = await uploadPacket(biller, 1);
+    await biller.post(`/api/intake/${item.id}/complete`)
+      .send({ decision: "new", patient: newPatient("TEST-BADREVIEW"), documents: [{ id: item.documents[0].id, docType: "other", verified: false }], fieldReview: [{ field: "x", label: "X", aiValue: null, finalValue: null, confidence: "high", outcome: "guessed" }] })
+      .expect(400);
+  });
+});

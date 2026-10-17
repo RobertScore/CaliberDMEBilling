@@ -1,0 +1,1 @@
+ALTER TABLE "intake_items" ADD COLUMN "field_review" jsonb;

@@ -192,8 +192,33 @@ const completeInput = z
       )
       .min(1),
     note: z.string().trim().max(2000).optional(),
+    // How each AI-read field ended up (checked, corrected, left unchecked). Stored for accuracy tracking.
+    fieldReview: z
+      .array(
+        z
+          .object({
+            field: z.string().max(60),
+            label: z.string().max(120),
+            aiValue: z.string().max(500).nullable(),
+            finalValue: z.string().max(500).nullable(),
+            confidence: z.enum(["high", "medium", "low"]),
+            outcome: z.enum(["ai", "checked", "edited", "typed", "empty"]),
+          })
+          .strict(),
+      )
+      .max(200)
+      .default([]),
   })
   .strict();
+
+/** A one-line accuracy summary for the account note (counts only, no values). */
+export function reviewLine(review: { outcome: string }[]): string {
+  if (!review.length) return "";
+  const n = (o: string) => review.filter((r) => r.outcome === o).length;
+  const parts = [`${n("checked")} checked as right`, `${n("edited")} corrected`];
+  if (n("ai")) parts.push(`${n("ai")} not checked`);
+  return `AI read ${review.length} field${review.length === 1 ? "" : "s"}: ${parts.join(", ")}.`;
+}
 
 // What an existing patient's file may be updated with: any subset of the fields, plus insurances by slot.
 const existingUpdate = patientInput.partial().extend({ insurances: z.array(insuranceInput).max(3).default([]) });
@@ -305,10 +330,11 @@ intakeRouter.post("/api/intake/:id/complete", requirePermission("intake.process"
   const summary = [
     `Paperwork received by ${item.source}${item.sender ? ` from ${item.sender}` : ""}. Filed to ${input.decision === "new" ? "a new patient" : "existing patient"}: ${filed.join(", ") || "nothing"}.`,
     setAside.length ? `Set aside, not for this patient (still in Inbox item #${id}): ${setAside.join(", ")}.` : "",
+    reviewLine(input.fieldReview),
     input.note ?? "",
   ].filter(Boolean).join("\n");
   await t.db.insert(notes).values({ patientId, body: summary, category: "intake", createdBy: req.user!.initials });
-  await t.db.update(intakeItems).set({ status: "done", decision: input.decision, patientId, completedAt: new Date(), completedBy: req.user!.initials }).where(eq(intakeItems.id, id));
+  await t.db.update(intakeItems).set({ status: "done", decision: input.decision, patientId, completedAt: new Date(), completedBy: req.user!.initials, fieldReview: input.fieldReview.length ? input.fieldReview : null }).where(eq(intakeItems.id, id));
   await audit(req, { action: "post", entityType: "intake", entityId: id, patientId, details: `${input.decision}; ${filed.length} documents filed; ${setAside.length} parts set aside` });
   publish(t.clientId, { kind: "intake" });
   publish(t.clientId, { kind: "documents", patientId });

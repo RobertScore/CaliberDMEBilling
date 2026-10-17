@@ -10,7 +10,8 @@ import type { Doc, Payer } from "@/lib/types";
 import { Page } from "@/components/Shell";
 import { Badge, EmptyState, useToast } from "@/components/ui";
 import { ErrorBox, Modal, Select } from "@/components/inputs";
-import { DocumentViewer } from "@/components/DocumentViewer";
+import { PageViewer, type Focus } from "@/components/PageViewer";
+import { AiField, originOf } from "@/components/AiField";
 import { PacketParts, checkParts, initialParts, splittable, type Part } from "@/components/PacketParts";
 import type { Extraction, ExtractedField } from "@shared/documents";
 import { PAYER_TYPES } from "@shared/picklists";
@@ -150,9 +151,8 @@ const INS_FIELDS = [
   ["employerName", "Employer"], ["adjusterName", "Adjuster"], ["adjusterPhone", "Adjuster phone"], ["referralNumber", "VA referral #"], ["authorizationNumber", "Authorization #"],
 ] as const;
 type InsKey = (typeof INS_FIELDS)[number][0];
-type InsForm = { rank: number; payerId: number; payerGuess: string; values: Record<InsKey, string>; conf: Record<string, string> };
+type InsForm = { rank: number; payerId: number; payerGuess: string; values: Record<InsKey, string>; ai: Partial<Record<InsKey | "payer", ExtractedField>> };
 
-const confRing = (c?: string) => (c === "low" ? "border-red-300 bg-red-50/40" : c === "medium" ? "border-amber-300 bg-amber-50/40" : "");
 
 function guessPayer(payers: Payer[], name: string | null, type: string) {
   const n = (name ?? "").toLowerCase();
@@ -171,11 +171,12 @@ export function IntakeReview({ id }: { id: number }) {
 
   const [docIdx, setDocIdx] = useState(0);
   const [fields, setFields] = useState<Record<string, string>>({});
-  const [conf, setConf] = useState<Record<string, string>>({});
+  const [aiP, setAiP] = useState<Record<string, ExtractedField>>({}); // what the AI read for each patient field
+  const [checked, setChecked] = useState<Record<string, boolean>>({}); // AI values a person confirmed ("p.lastName", "i0.claimNumber")
+  const [focus, setFocus] = useState<Focus | null>(null);
   const [ins, setIns] = useState<InsForm[]>([]);
   const [coverage, setCoverage] = useState("WC");
   const [parts, setParts] = useState<Record<number, Part[]>>({});
-  const [viewPage, setViewPage] = useState<number | undefined>();
   const [slots, setSlots] = useState<Record<number, string>>({}); // existing patient: where each read insurance goes
   const [chosen, setChosen] = useState<{ id: number; label: string } | null>(null); // picked by search, not suggested
   const [decision, setDecision] = useState<"new" | "existing" | null>(null);
@@ -195,14 +196,17 @@ export function IntakeReview({ id }: { id: number }) {
     setLoadedFor(stamp);
     const e = item.extraction;
     const f: Record<string, string> = {};
-    const c: Record<string, string> = {};
-    if (e) for (const k of PATIENT_FIELDS) { const v = e.patient[k.key] as ExtractedField; f[k.key] = v.value ?? ""; c[k.key] = v.value ? v.confidence : ""; }
+    const a: Record<string, ExtractedField> = {};
+    if (e) for (const k of PATIENT_FIELDS) { const v = e.patient[k.key] as ExtractedField; f[k.key] = v.value ?? ""; if (v.value) a[k.key] = v; }
     setFields(f);
-    setConf(c);
+    setAiP(a);
+    setChecked({});
+    setFocus(null);
     setIns((e?.insurances ?? []).map((i) => {
       const values = Object.fromEntries(INS_FIELDS.map(([k]) => [k, (i[k] as ExtractedField).value ?? ""])) as Record<InsKey, string>;
-      const cc = Object.fromEntries(INS_FIELDS.map(([k]) => [k, (i[k] as ExtractedField).value ? (i[k] as ExtractedField).confidence : ""]));
-      return { rank: i.rank, payerId: guessPayer(payers.data, i.payerName.value, i.payerTypeGuess)?.id ?? 0, payerGuess: i.payerName.value ?? "", values, conf: { ...cc, payer: i.payerName.confidence } };
+      const ai = Object.fromEntries(INS_FIELDS.filter(([k]) => (i[k] as ExtractedField).value).map(([k]) => [k, i[k] as ExtractedField]));
+      const payerId = guessPayer(payers.data, i.payerName.value, i.payerTypeGuess)?.id ?? 0;
+      return { rank: i.rank, payerId, payerGuess: i.payerName.value ?? "", values, ai: { ...ai, ...(i.payerName.value && payerId ? { payer: { ...i.payerName, value: String(payerId) } } : {}) } };
     }));
     const t = e?.insurances[0]?.payerTypeGuess;
     if (t && t !== "UNKNOWN") setCoverage(t);
@@ -278,6 +282,7 @@ export function IntakeReview({ id }: { id: number }) {
           return { id: d.id, docType: ps[0]?.docType ?? d.docType, verified: !!ps[0]?.verified };
         }),
         note: note.trim() || undefined,
+        fieldReview: fieldReview(),
       }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["intake"] });
@@ -298,27 +303,70 @@ export function IntakeReview({ id }: { id: number }) {
   const insProblems = decision === "existing" ? [...(slotClash ? ["Two insurances are going into the same slot."] : []), ...(planned.some((x) => !x.i.payerId) ? ["Choose the payer for each insurance you're saving."] : [])] : [];
   const canFile = !handled && decision && (decision === "new" || pick) && missingRequired.length === 0 && partErrors.length === 0 && insProblems.length === 0;
   let step = 1;
+  // ---- AI-read fields: where each came from, checking them one by one -----------------------------
+  const labelOf = (key: string) => {
+    const [scope, k] = key.split(".");
+    if (scope === "p") return PATIENT_FIELDS.find((f) => f.key === k)?.label ?? k;
+    return k === "payer" ? "Payer" : INS_FIELDS.find(([x]) => x === k)?.[1] ?? k;
+  };
+  /** Jump the document to where the AI read this value, and highlight it. */
+  function locate(key: string, ai?: ExtractedField) {
+    const w = ai?.where;
+    if (!w || !item) return;
+    if (w.file >= 0 && w.file < item.documents.length) setDocIdx(w.file);
+    setFocus({ page: Math.max(1, w.page), box: w.box && w.box.w > 0 && w.box.h > 0 ? w.box : null, label: `${labelOf(key)}${w.box ? "" : ` (page ${w.page})`}`, n: Date.now() });
+  }
+  // Every AI-read field currently on screen, in screen order.
+  const showPatient = decision === "new" || applyUpdates;
+  const showIns = (n: number) => decision === "new" || (decision === "existing" && !!pick && slotOf(n) !== "skip");
+  const aiFields: { key: string; ai: ExtractedField; value: string }[] = [
+    ...(showPatient ? PATIENT_FIELDS.filter((f) => aiP[f.key]).map((f) => ({ key: `p.${f.key}`, ai: aiP[f.key], value: fields[f.key] ?? "" })) : []),
+    ...ins.flatMap((i, n) => (showIns(n) ? [
+      ...(i.ai.payer ? [{ key: `i${n}.payer`, ai: i.ai.payer, value: String(i.payerId || "") }] : []),
+      ...INS_FIELDS.filter(([k]) => i.ai[k]).map(([k]) => ({ key: `i${n}.${k}`, ai: i.ai[k]!, value: i.values[k] })),
+    ] : [])),
+  ];
+  const tally = aiFields.reduce((t, f) => { t[originOf(f.value, f.ai, !!checked[f.key])]++; return t; }, { ai: 0, checked: 0, edited: 0, typed: 0, empty: 0 });
+  /** Move to the next AI field that still needs checking. */
+  function goNext(after?: string) {
+    const start = after ? aiFields.findIndex((f) => f.key === after) + 1 : 0;
+    const order = [...aiFields.slice(start), ...aiFields.slice(0, start)];
+    const next = order.find((f) => f.key !== after && originOf(f.value, f.ai, !!checked[f.key]) === "ai");
+    if (!next) return;
+    const el = document.getElementById(`f-${next.key}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    el?.focus({ preventScroll: true });
+    locate(next.key, next.ai);
+  }
+  const fieldProps = (key: string, ai: ExtractedField | undefined, value: string, onChange: (v: string) => void) => ({
+    id: `f-${key}`, value, ai, checked: !!checked[key], disabled: handled, onChange,
+    onCheck: () => setChecked((c) => ({ ...c, [key]: true })),
+    onUndo: () => ai?.value && onChange(ai.value),
+    onLocate: () => locate(key, ai),
+    onNext: () => goNext(key),
+  });
+  /** What happened to each AI value, saved with the filing so accuracy can be measured. */
+  const fieldReview = () => aiFields.map((f) => ({ field: f.key, label: labelOf(f.key), aiValue: f.ai.value, finalValue: f.value || null, confidence: f.ai.confidence, outcome: originOf(f.value, f.ai, !!checked[f.key]) }));
+
+  const setInsValue = (n: number, k: InsKey, v: string) => setIns((x) => x.map((y, m) => (m === n ? { ...y, values: { ...y.values, [k]: v } } : y)));
   const insCard = (i: InsForm, n: number, top?: ReactNode) => (
-<div key={n} className="mb-3 rounded-lg border border-slate-200 p-3">
-{top}
-                    <div className="mb-2 grid grid-cols-3 gap-3">
-                      <label className="field col-span-2">
-                        <span className="label">{decision === "new" ? `${["Primary", "Secondary", "Tertiary"][i.rank - 1]} payer` : "Payer"}{i.payerGuess ? ` (paper says “${i.payerGuess}”)` : ""}</span>
-                        <select className={`input ${!i.payerId ? "border-red-300" : confRing(i.conf.payer)}`} value={i.payerId || ""} disabled={handled} onChange={(e) => setIns((x) => x.map((y, m) => (m === n ? { ...y, payerId: Number(e.target.value) } : y)))}>
-                          <option value="">Choose the payer…</option>
-                          {payers.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                      </label>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3">
-                      {INS_FIELDS.map(([k, label]) => (
-                        <label key={k} className="field">
-                          <span className="label">{label}</span>
-                          <input className={`input ${confRing(i.conf[k])}`} value={i.values[k]} disabled={handled} onChange={(e) => setIns((x) => x.map((y, m) => (m === n ? { ...y, values: { ...y.values, [k]: e.target.value }, conf: { ...y.conf, [k]: "" } } : y)))} />
-                        </label>
-                      ))}
-                    </div>
-                  </div>
+    <div key={n} className="mb-3 rounded-lg border border-slate-200 p-3">
+      {top}
+      <div className="mb-2 grid grid-cols-3 gap-3">
+        <AiField {...fieldProps(`i${n}.payer`, i.ai.payer, String(i.payerId || ""), (v) => setIns((x) => x.map((y, m) => (m === n ? { ...y, payerId: Number(v) } : y))))} aiText={i.payerGuess}
+          label={`${decision === "new" ? `${["Primary", "Secondary", "Tertiary"][i.rank - 1]} payer` : "Payer"}${i.payerGuess ? ` (paper says “${i.payerGuess}”)` : ""}`} className="col-span-2">
+          {({ id: fid, className, onFocus }) => (
+            <select id={fid} className={`${className} ${!i.payerId ? "!border-red-300" : ""}`} value={i.payerId || ""} disabled={handled} onFocus={onFocus} onChange={(e) => setIns((x) => x.map((y, m) => (m === n ? { ...y, payerId: Number(e.target.value) } : y)))}>
+              <option value="">Choose the payer…</option>
+              {payers.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          )}
+        </AiField>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        {INS_FIELDS.map(([k, label]) => <AiField key={k} {...fieldProps(`i${n}.${k}`, i.ai[k], i.values[k], (v) => setInsValue(n, k, v))} label={label} />)}
+      </div>
+    </div>
   );
 
   return (
@@ -333,13 +381,13 @@ export function IntakeReview({ id }: { id: number }) {
         {item.documents.length > 1 && (
           <div className="mb-2 flex flex-wrap gap-1">
             {item.documents.map((d, i) => (
-              <button key={d.id} onClick={() => { setDocIdx(i); setViewPage(undefined); }} className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs ${i === docIdx ? "bg-navy-800 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+              <button key={d.id} onClick={() => { setDocIdx(i); setFocus(null); }} className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs ${i === docIdx ? "bg-navy-800 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
                 {(parts[d.id] ?? []).every((p) => p.skip || p.verified) ? <CheckCircle2 size={12} /> : <FileText size={12} />} File {i + 1}{d.pageCount && d.pageCount > 1 ? ` (${d.pageCount} pages)` : ""}
               </button>
             ))}
           </div>
         )}
-        {current && <DocumentViewer documentId={current.id} mimeType={current.mimeType} height="calc(100vh - 150px)" page={viewPage} />}
+        {current && <PageViewer documentId={current.id} mimeType={current.mimeType} focus={focus} />}
       </div>
 
       {/* The review, on the right */}
@@ -360,6 +408,32 @@ export function IntakeReview({ id }: { id: number }) {
               </div>
               {!handled && <button className="btn btn-ghost btn-sm" onClick={() => reread.mutate()} title="Read again"><RefreshCw size={14} /></button>}
             </div>
+
+            {aiFields.length > 0 && !handled && (
+              <div className="sticky top-0 z-10 rounded-xl border border-violet-200 bg-white/95 p-3 shadow-sm backdrop-blur">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Sparkles size={16} className="text-violet-600" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-slate-900">
+                      {tally.checked + tally.edited} of {aiFields.length} AI values checked{tally.edited ? ` · ${tally.edited} corrected` : ""}
+                    </div>
+                    <div className="mt-1 flex h-1.5 overflow-hidden rounded-full bg-violet-100">
+                      <div className="bg-emerald-500" style={{ width: `${(tally.checked / aiFields.length) * 100}%` }} />
+                      <div className="bg-amber-400" style={{ width: `${(tally.edited / aiFields.length) * 100}%` }} />
+                    </div>
+                  </div>
+                  <button className="btn btn-sm border-violet-300 bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50" disabled={tally.ai === 0} onClick={() => goNext()}>
+                    {tally.ai === 0 ? "All checked" : `Check next (${tally.ai} left)`}
+                  </button>
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-2xs text-slate-500">
+                  <span><span className="mr-1 inline-block h-2 w-3 rounded-sm border-2 border-violet-400 bg-violet-50" />AI, not checked yet</span>
+                  <span><span className="mr-1 inline-block h-2 w-3 rounded-sm border-2 border-emerald-400 bg-emerald-50" />AI, checked</span>
+                  <span><span className="mr-1 inline-block h-2 w-3 rounded-sm border-2 border-amber-400 bg-amber-50" />Corrected by you</span>
+                  <span>Click a field to jump to where it was read · Enter = “it matches the paper”</span>
+                </div>
+              </div>
+            )}
 
             {handled && <div className="rounded-lg bg-slate-100 p-3 text-sm text-slate-600">This paperwork was {item.status === "done" ? `filed by ${item.completedBy}` : `set aside by ${item.completedBy}`}.</div>}
 
@@ -416,10 +490,7 @@ export function IntakeReview({ id }: { id: number }) {
                 <div className="mb-3 font-semibold text-slate-900">{step++}. Patient details</div>
                 <div className="grid grid-cols-3 gap-3">
                   {PATIENT_FIELDS.map((f) => (
-                    <label key={f.key} className={`field ${f.span ?? ""}`}>
-                      <span className="label">{f.label}{f.required && <span className="text-red-500"> *</span>}</span>
-                      <input className={`input ${confRing(conf[f.key])}`} value={fields[f.key] ?? ""} disabled={handled} onChange={(e) => { setFields((x) => ({ ...x, [f.key]: e.target.value })); setConf((c) => ({ ...c, [f.key]: "" })); }} />
-                    </label>
+                    <AiField key={f.key} {...fieldProps(`p.${f.key}`, aiP[f.key], fields[f.key] ?? "", (v) => setFields((x) => ({ ...x, [f.key]: v })))} label={f.label} required={f.required} className={f.span ?? ""} />
                   ))}
                   {decision === "new" && (
                     <label className="field">
@@ -433,7 +504,7 @@ export function IntakeReview({ id }: { id: number }) {
                 {ins.length === 0 && <div className="text-sm text-slate-400">No insurance was read. Add it now or later on the patient's file.</div>}
                 {ins.map((i, n) => insCard(i, n))}
                 {!handled && ins.length < 3 && (
-                  <button className="btn btn-sm" onClick={() => setIns((x) => [...x, { rank: x.length + 1, payerId: 0, payerGuess: "", values: Object.fromEntries(INS_FIELDS.map(([k]) => [k, ""])) as Record<InsKey, string>, conf: {} }])}>+ Add insurance</button>
+                  <button className="btn btn-sm" onClick={() => setIns((x) => [...x, { rank: x.length + 1, payerId: 0, payerGuess: "", values: Object.fromEntries(INS_FIELDS.map(([k]) => [k, ""])) as Record<InsKey, string>, ai: {} }])}>+ Add insurance</button>
                 )}
                 </>}
                 {(item.extraction?.diagnosisCodes.length || item.extraction?.hcpcsCodes.length || item.extraction?.orderingPhysician.value) ? (
@@ -482,7 +553,7 @@ export function IntakeReview({ id }: { id: number }) {
                   )),
                 )}
                 {!handled && ins.length < 3 && (
-                  <button className="btn btn-sm" onClick={() => setIns((x) => [...x, { rank: x.length + 1, payerId: 0, payerGuess: "", values: Object.fromEntries(INS_FIELDS.map(([k]) => [k, ""])) as Record<InsKey, string>, conf: {} }])}>+ Add insurance</button>
+                  <button className="btn btn-sm" onClick={() => setIns((x) => [...x, { rank: x.length + 1, payerId: 0, payerGuess: "", values: Object.fromEntries(INS_FIELDS.map(([k]) => [k, ""])) as Record<InsKey, string>, ai: {} }])}>+ Add insurance</button>
                 )}
                 {insProblems.map((m) => <div key={m} className="mt-2 text-xs text-red-600">{m}</div>)}
               </section>
@@ -501,10 +572,10 @@ export function IntakeReview({ id }: { id: number }) {
                   return (
                     <div key={d.id}>
                       <div className="mb-1.5 flex items-center gap-2 text-xs">
-                        <button className={`font-medium ${i === docIdx ? "text-navy-800" : "text-navy-600 hover:underline"}`} onClick={() => { setDocIdx(i); setViewPage(undefined); }}>File {i + 1}</button>
+                        <button className={`font-medium ${i === docIdx ? "text-navy-800" : "text-navy-600 hover:underline"}`} onClick={() => { setDocIdx(i); setFocus(null); }}>File {i + 1}</button>
                         <span className="truncate text-slate-500">{d.originalName}{d.pageCount ? ` · ${d.pageCount} page${d.pageCount === 1 ? "" : "s"}` : ""}</span>
                       </div>
-                      <PacketParts doc={d} parts={parts[d.id] ?? []} onChange={(ps) => setParts((x) => ({ ...x, [d.id]: ps }))} onView={(pg) => { setDocIdx(i); setViewPage(pg); }} disabled={handled} />
+                      <PacketParts doc={d} parts={parts[d.id] ?? []} onChange={(ps) => setParts((x) => ({ ...x, [d.id]: ps }))} onView={(pg) => { setDocIdx(i); setFocus({ page: pg, box: null, label: `Page ${pg}`, n: Date.now() }); }} disabled={handled} />
                     </div>
                   );
                 })}

@@ -26,3 +26,4 @@ These run inside our own server. No data is sent to anyone, so no BAA is needed.
 |---|---|
 | pdf-lib (MIT licence) | Counting pages and splitting faxed packets into separate documents |
 | fflate (MIT licence) | Opening the official CMS / CDC code-set zip files (no patient data) |
+| pdfjs-dist (Apache-2.0 licence) | Drawing PDF pages in the browser so a click on an AI-filled field can jump to that spot. Runs entirely in the user's browser; nothing is sent anywhere |

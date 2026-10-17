@@ -40,8 +40,13 @@ export function makePdf(pages: Line[][]): Buffer {
   return Buffer.from(out, "latin1");
 }
 
-const f = (value: string | null, confidence: ExtractedField["confidence"] = "high"): ExtractedField => ({ value, confidence });
+const f = (value: string | null, confidence: ExtractedField["confidence"] = "high", where: ExtractedField["where"] = null): ExtractedField => ({ value, confidence, where });
 const none = () => f(null, "high");
+/** Where a labelled() value sits on a demo page, as page fractions (the demo knows exactly where it wrote it). */
+const at = (page: number, startY: number, row: number, text: string): ExtractedField["where"] => {
+  const y = startY - row * 24;
+  return { file: 0, page, box: { x: 200 / 612, y: (792 - y - 14) / 792, w: Math.min(0.62, (text.length * 7.4 + 12) / 612), h: 20 / 792 } };
+};
 
 function header(title: string, sub: string): Line[] {
   return [
@@ -108,18 +113,18 @@ function newReferral(): { name: string; pdf: Buffer; extraction: Extraction } {
     pdf,
     extraction: {
       patient: {
-        lastName: f("SAMPLE"), firstName: f("MARIA"), middleInitial: f("L", "medium"), dob: f("1979-04-22"), sex: f("F"), ssn: none(),
-        address1: f("742 EXAMPLE AVE"), address2: none(), city: f("SAN DIEGO"), state: f("CA"), zip: f("92103"),
-        phone: f("555-0142", "medium"), cellPhone: none(), email: none(), employer: f("DEMO LOGISTICS CO"),
+        lastName: f("SAMPLE", "high", at(3, 650, 0, "SAMPLE")), firstName: f("MARIA", "high", at(3, 650, 1, "MARIA")), middleInitial: f("L", "medium", at(3, 650, 2, "L")), dob: f("1979-04-22", "high", at(3, 650, 3, "04/22/1979")), sex: f("F", "high", at(3, 650, 4, "F")), ssn: none(),
+        address1: f("742 EXAMPLE AVE", "high", at(3, 650, 5, "742 EXAMPLE AVE")), address2: none(), city: f("SAN DIEGO", "high", at(3, 650, 6, "SAN DIEGO, CA 92103")), state: f("CA", "high", at(3, 650, 6, "SAN DIEGO, CA 92103")), zip: f("92103", "high", at(3, 650, 6, "SAN DIEGO, CA 92103")),
+        phone: f("555-0142", "medium", at(3, 650, 7, "555-0142")), cellPhone: none(), email: none(), employer: f("DEMO LOGISTICS CO", "high", at(3, 650, 8, "DEMO LOGISTICS CO")),
       },
       insurances: [
         {
-          rank: 1, payerName: f("GOLDEN STATE COMP MUTUAL (TEST)"), payerTypeGuess: "WC", memberId: none(), groupNumber: none(),
-          claimNumber: f("TEST-WC-7781"), dateOfInjury: f("2026-09-12"), employerName: f("DEMO LOGISTICS CO"),
-          adjusterName: f("PAT EXAMPLE", "medium"), adjusterPhone: f("555-0177", "low"), referralNumber: none(), authorizationNumber: f("AUTH-TEST-4410", "medium"),
+          rank: 1, payerName: f("GOLDEN STATE COMP MUTUAL (TEST)", "high", at(3, 650, 9, "GOLDEN STATE COMP MUTUAL (TEST)")), payerTypeGuess: "WC", memberId: none(), groupNumber: none(),
+          claimNumber: f("TEST-WC-7781", "high", at(3, 650, 10, "TEST-WC-7781")), dateOfInjury: f("2026-09-12", "high", at(3, 650, 11, "09/12/2026")), employerName: f("DEMO LOGISTICS CO", "high", at(3, 650, 8, "DEMO LOGISTICS CO")),
+          adjusterName: f("PAT EXAMPLE", "medium", at(3, 650, 12, "PAT EXAMPLE")), adjusterPhone: f("555-0177", "low", at(3, 650, 12, "PAT EXAMPLE  555-0177")), referralNumber: none(), authorizationNumber: f("AUTH-TEST-4410", "medium", at(3, 650, 13, "AUTH-TEST-4410")),
         },
       ],
-      orderingPhysician: f("DR. SAMPLE ORTHO"),
+      orderingPhysician: f("DR. SAMPLE ORTHO", "high", { file: 0, page: 2, box: { x: 56 / 612, y: (792 - 706) / 792, w: 0.62, h: 16 / 792 } }),
       diagnosisCodes: ["M25.561", "S83.511A"],
       hcpcsCodes: ["E0218", "E0236"],
       documents: [{ index: 0, docType: "rx", confidence: "medium", summary: "Fax packet: cover sheet, prescription for a cold therapy unit, and patient information / RFA." }],
@@ -155,7 +160,7 @@ function deliveryTicket(lastName: string): { name: string; pdf: Buffer; extracti
     pdf,
     extraction: {
       patient: {
-        lastName: f(lastName), firstName: f("PATIENT ONE"), middleInitial: none(), dob: f("1980-01-01"), sex: none(), ssn: none(),
+        lastName: f(lastName, "high", at(1, 650, 0, `${lastName}, PATIENT ONE`)), firstName: f("PATIENT ONE", "high", at(1, 650, 0, `${lastName}, PATIENT ONE`)), middleInitial: none(), dob: f("1980-01-01", "high", at(1, 650, 1, "01/01/1980")), sex: none(), ssn: none(),
         address1: none(), address2: none(), city: none(), state: none(), zip: none(), phone: none(), cellPhone: none(), email: none(), employer: none(),
       },
       insurances: [],

@@ -202,6 +202,8 @@ export const intakeItems = pgTable("intake_items", {
   patientId: integer("patient_id"),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   completedBy: text("completed_by"),
+  // Field by field: what the AI read, what was filed, and whether a person checked it (to measure AI accuracy).
+  fieldReview: jsonb("field_review"),
   createdBy: text("created_by").notNull(),
 });
 

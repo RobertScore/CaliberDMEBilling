@@ -33,6 +33,15 @@ const SYSTEM = `You read paperwork for a durable medical equipment (DME) billing
 delivery tickets, purchase orders, Workers' Compensation RFA forms, VA referrals, insurance cards and chart notes.
 Pages may be typed, handwritten, skewed or low quality.
 
+Packets are often long and messy: old claims, relatives, attorneys, nurse case managers, other insurance cards,
+prior authorizations, cancelled items, duplicate or upside-down pages, and sometimes a page about a different person.
+- Extract the details of the ONE patient the packet is about, for the CURRENT order. Ignore other people's details.
+- When there are several claims, referrals or authorizations, use the one that matches the current order and is
+  active / most recent; mention the others in readerNotes.
+- When pages disagree (a different date of birth, claim number or date of injury), pick the value most pages support,
+  mark it "low" confidence, and describe the conflict in readerNotes.
+- In readerNotes, also list any page that seems to belong to a different patient, and any item that was denied or cancelled.
+
 Extract only what is actually written. Never guess or fill in a value that isn't on the page.
 - If a value is missing, return null.
 - Confidence: "high" when clearly legible; "medium" when you had to interpret handwriting or a smudge; "low" when

@@ -7,6 +7,9 @@ import { openControlDb } from "./db/control";
 import { seedDemo } from "./seed";
 import { IS_PRODUCTION, PORT, DATA_DIR } from "./config";
 
+// Local settings (like ANTHROPIC_API_KEY) can live in a .env file next to package.json. It is never committed.
+if (fs.existsSync(".env") && typeof process.loadEnvFile === "function") process.loadEnvFile(".env");
+
 async function main() {
   const [major, minor] = process.versions.node.split(".").map(Number);
   if (major < 20 || (major === 20 && minor < 11)) {

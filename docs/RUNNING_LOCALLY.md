@@ -70,12 +70,29 @@ To stop it, click the Terminal window and press `Ctrl+C`.
 - **Switching clients** (top of the sidebar) closes all open patients and
   clears everything from the previous client.
 
-## The AI reader (later)
+## The AI reader
 
-It is built but **off**. It must stay off until Caliber has a signed BAA with
-Anthropic (see `docs/VENDORS_AND_BAAS.md`). Once that's signed, the server is
-started with `CALIBER_AI_READER=anthropic`, `CALIBER_AI_BAA_CONFIRMED=yes` and
-an `ANTHROPIC_API_KEY` kept in the hosting provider's secret storage.
+It's **on for the local demo** (fake data only) as soon as you give it an
+Anthropic API key:
+
+1. Get a key at https://console.anthropic.com (Settings → API keys).
+2. In your `CaliberDMEBilling` folder, make a file named `.env` (copy
+   `.env.example`) containing:
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...your key...
+   ```
+   `.env` is never committed to GitHub.
+3. Restart with `npm run dev`. The Inbox shows "AI reader on".
+
+Now the Inbox's sample buttons, and anything you upload, are read by Claude,
+including handwriting. **Upload fake paperwork only.** You can make your own:
+print a blank form, fill it in by hand with made-up details, and scan or
+photograph it.
+
+**Before any real patient data:** pause it by adding `CALIBER_AI_READER=off`,
+unless Caliber's BAA with Anthropic is signed. On the real (production) server
+it also refuses to run unless `CALIBER_AI_BAA_CONFIRMED=yes` is set, as a
+second safety net.
 
 ## Start over with fresh demo data
 

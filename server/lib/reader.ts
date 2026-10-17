@@ -1,10 +1,8 @@
 // The paperwork reader: turns faxed / emailed / scanned documents into suggested field values.
 //
-// Three modes, picked automatically:
-//  - "claude": Claude reads typed text and handwriting. ONLY enabled when Caliber has a signed BAA with
-//    Anthropic and turns it on (CLAUDE.md 3.2). Needs CALIBER_AI_READER=anthropic, CALIBER_AI_BAA_CONFIRMED=yes
-//    and Anthropic credentials (ANTHROPIC_API_KEY).
-//  - "demo": recognizes only the fake sample paperwork from demoPaperwork.ts.
+// Modes, picked automatically:
+//  - "claude": Claude reads typed text and handwriting. See aiReaderStatus() for when it's on.
+//  - "demo": recognizes only the fake sample paperwork from demoPaperwork.ts (used when Claude is off).
 //  - "manual": nothing is sent anywhere; staff type the fields while looking at the document.
 //
 // Whatever the mode, nothing is saved until a person reviews every field.
@@ -16,9 +14,20 @@ import { demoExtraction } from "./demoPaperwork";
 export type ReaderFile = { data: Buffer; mimeType: string; sha256: string; name: string };
 export type ReaderResult = { reader: "claude" | "demo" | "manual"; extraction: Extraction | null; error?: string };
 
-export function aiReaderEnabled() {
-  return process.env.CALIBER_AI_READER === "anthropic" && process.env.CALIBER_AI_BAA_CONFIRMED === "yes";
+/**
+ * Is the Claude reader on?
+ *  - CALIBER_AI_READER=off pauses it anywhere (the switch to flip before real patient data, until the BAA is signed).
+ *  - Local demo (fake data only): on whenever ANTHROPIC_API_KEY is set. Robert's decision, 2026-10-17.
+ *  - Production (real PHI): also needs CALIBER_AI_BAA_CONFIRMED=yes, i.e. a signed BAA with Anthropic (CLAUDE.md 3.2).
+ */
+export function aiReaderStatus(): { on: boolean; why: string } {
+  const production = process.env.NODE_ENV === "production";
+  if (process.env.CALIBER_AI_READER === "off") return { on: false, why: "The AI reader is paused." };
+  if (!process.env.ANTHROPIC_API_KEY) return { on: false, why: "The AI reader needs an Anthropic API key (see docs/RUNNING_LOCALLY.md)." };
+  if (production && process.env.CALIBER_AI_BAA_CONFIRMED !== "yes") return { on: false, why: "The AI reader stays off for real patient data until Caliber's BAA with Anthropic is signed." };
+  return { on: true, why: production ? "AI reader on (BAA signed)." : "AI reader on. Demo: upload fake paperwork only." };
 }
+export const aiReaderEnabled = () => aiReaderStatus().on;
 
 const SYSTEM = `You read paperwork for a durable medical equipment (DME) billing office: faxed referrals, prescriptions,
 delivery tickets, purchase orders, Workers' Compensation RFA forms, VA referrals, insurance cards and chart notes.
@@ -65,11 +74,13 @@ async function readWithClaude(files: ReaderFile[]): Promise<Extraction> {
 }
 
 export async function readPaperwork(files: ReaderFile[]): Promise<ReaderResult> {
+  // When Claude is on it reads everything, including the samples, so you see the real thing.
+  // When it's off (or fails) the fake samples still fill in from the demo reader.
   const demo = demoExtraction(files.map((f) => f.sha256));
-  if (demo) return { reader: "demo", extraction: demo };
-  if (!aiReaderEnabled()) return { reader: "manual", extraction: null };
+  const fallback = (error?: string): ReaderResult => (demo ? { reader: "demo", extraction: demo, error } : { reader: "manual", extraction: null, error });
+  if (!aiReaderEnabled()) return fallback();
   const supported = files.filter((f) => ["application/pdf", "image/png", "image/jpeg", "image/webp"].includes(f.mimeType));
-  if (!supported.length) return { reader: "manual", extraction: null, error: "These file types can't be read automatically. Please enter the fields by hand." };
+  if (!supported.length) return fallback("These file types (TIFF, HEIC) can't be read automatically. Please enter the fields by hand.");
   try {
     return { reader: "claude", extraction: await readWithClaude(supported) };
   } catch (err) {
@@ -82,6 +93,6 @@ export async function readPaperwork(files: ReaderFile[]): Promise<ReaderResult> 
           : err instanceof Error
             ? err.message
             : "The reader failed. Please enter the fields by hand.";
-    return { reader: "manual", extraction: null, error: msg };
+    return fallback(msg);
   }
 }

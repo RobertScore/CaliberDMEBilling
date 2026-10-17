@@ -3,6 +3,7 @@ export interface SessionInfo {
   permissions: string[];
   viewAs: { realName: string; reason: string } | null;
   aiReader: "on" | "off";
+  aiReaderNote: string;
   clients: { id: number; name: string }[];
   activeClient: { id: number; name: string } | null;
 }

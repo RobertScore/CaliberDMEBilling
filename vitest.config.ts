@@ -12,6 +12,7 @@ export default defineConfig({
     testTimeout: 30000,
     hookTimeout: 60000,
     fileParallelism: false,
-    env: { DATA_DIR: "memory", NODE_ENV: "test" },
+    // Tests never call the AI reader.
+    env: { DATA_DIR: "memory", NODE_ENV: "test", CALIBER_AI_READER: "off" },
   },
 });

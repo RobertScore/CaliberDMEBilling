@@ -5,7 +5,7 @@ import { getControlDb } from "../db/control";
 import { clients, loginAudit, users, userClientAssignments } from "@shared/schema/control";
 import { loginInput, switchClientInput } from "@shared/validation";
 import { ROLE_PERMISSIONS, ROLE_LABELS, type Role } from "@shared/permissions";
-import { aiReaderEnabled } from "../lib/reader";
+import { aiReaderStatus } from "../lib/reader";
 import { HttpError, requireAuth, userCanAccessClient } from "../middleware";
 
 export const authRouter = Router();
@@ -53,7 +53,8 @@ authRouter.get("/api/session", requireAuth, async (req, res) => {
     user: { ...user, roleLabel: ROLE_LABELS[user.role as Role] ?? user.role },
     permissions: ROLE_PERMISSIONS[user.role as Role] ?? [],
     viewAs: req.realUser ? { realName: req.realUser.name, reason: req.session.viewAsReason ?? "" } : null,
-    aiReader: aiReaderEnabled() ? "on" : "off",
+    aiReader: aiReaderStatus().on ? "on" : "off",
+    aiReaderNote: aiReaderStatus().why,
     clients: allowed.filter((c) => c.status === "active").map((c) => ({ id: c.id, name: c.name })),
     activeClient: active ? { id: active.id, name: active.name } : null,
   });

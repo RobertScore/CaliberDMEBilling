@@ -30,6 +30,7 @@ const SOURCE: Record<string, { label: string; icon: ReactElement }> = {
 const READER: Record<string, string> = { claude: "AI reader", demo: "Demo reader", manual: "Typed by hand" };
 
 export function InboxScreen() {
+  const { aiReader, aiReaderNote } = useSession();
   const nav = useNav();
   const qc = useQueryClient();
   const toast = useToast();
@@ -48,7 +49,12 @@ export function InboxScreen() {
   return (
     <Page
       title="Inbox"
-      subtitle="New paperwork from fax, email, the portals and the API. Open each one, check what was read, and file it to a patient."
+      subtitle={
+        <span className="flex flex-wrap items-center gap-2">
+          New paperwork from fax, email, the portals and the API. Open each one, check what was read, and file it to a patient.
+          <Badge tone={aiReader === "on" ? "green" : "slate"}><Bot size={11} /> {aiReaderNote}</Badge>
+        </span>
+      }
       actions={
         <>
           <button className="btn btn-sm" onClick={() => demo.mutate("new")} title="Practice with fake paperwork"><Sparkles size={14} /> Sample: new patient fax</button>
@@ -157,7 +163,7 @@ export function IntakeReview({ id }: { id: number }) {
   const nav = useNav();
   const qc = useQueryClient();
   const toast = useToast();
-  const { aiReader } = useSession();
+  const { aiReader, aiReaderNote } = useSession();
   const q = useQuery({ queryKey: ["intake", "item", id], queryFn: () => get<Item>(`/api/intake/${id}`), refetchInterval: (x) => (x.state.data?.status === "reading" ? 1500 : false) });
   const payers = useQuery({ queryKey: ["payers"], queryFn: () => get<Payer[]>("/api/payers"), staleTime: 300_000 });
   const item = q.data;
@@ -276,7 +282,7 @@ export function IntakeReview({ id }: { id: number }) {
             <div className={`flex items-start gap-3 rounded-xl border p-4 text-sm ${item.reader === "manual" ? "border-amber-200 bg-amber-50 text-amber-900" : "border-navy-100 bg-navy-50/60 text-navy-900"}`}>
               {item.reader === "manual" ? <AlertTriangle size={18} className="shrink-0" /> : <Bot size={18} className="shrink-0" />}
               <div className="flex-1">
-                <div className="font-medium">{READER[item.reader ?? "manual"]}{item.reader === "manual" && aiReader === "off" ? " (the AI reader is off until Caliber's BAA with the AI vendor is signed)" : ""}</div>
+                <div className="font-medium">{READER[item.reader ?? "manual"]}{item.reader !== "claude" && aiReader === "off" ? ` (${aiReaderNote})` : ""}</div>
                 <div className="mt-0.5 text-xs opacity-80">
                   {item.reader === "manual" ? "Type the details from the paper on the left." : "Check every value against the paper. Red = the reader wasn't sure. Amber = fairly sure. Nothing is saved until you file it."}
                   {item.extraction?.readerNotes ? ` Reader notes: ${item.extraction.readerNotes}` : ""}

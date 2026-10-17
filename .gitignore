@@ -18,6 +18,8 @@ secrets/
 *.csv
 !docs/**/*.example.csv
 !client/public/**
+# Exception: generated, 100% fictional test packets (scripts/sample-packets/make_packets.py). Nothing else.
+!samples/intake-packets/*.pdf
 exports/
 uploads/
 backups/

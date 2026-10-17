@@ -77,6 +77,9 @@ patientsRouter.get("/api/patients", requirePermission("patient.view"), async (re
     ? or(
         eq(patients.accountNumber, raw),
         and(ilike(patients.lastName, `${last}%`), first ? ilike(patients.firstName, `${first}%`) : undefined),
+        // No comma: also try the first name, and "first last".
+        raw.includes(",") ? undefined : ilike(patients.firstName, `${raw}%`),
+        raw.includes(",") ? undefined : sql`(${patients.firstName} || ' ' || ${patients.lastName}) ilike ${`${raw}%`}`,
       )
     : undefined;
   const rows = await req.tenant!.db

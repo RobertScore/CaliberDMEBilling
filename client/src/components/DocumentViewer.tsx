@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { ExternalLink, ZoomIn, ZoomOut } from "lucide-react";
 
-export function DocumentViewer({ documentId, mimeType, height = "70vh" }: { documentId: number; mimeType: string; height?: string }) {
+/** page: open a PDF at this page (1-based). */
+export function DocumentViewer({ documentId, mimeType, height = "70vh", page }: { documentId: number; mimeType: string; height?: string; page?: number }) {
   const [zoom, setZoom] = useState(1);
   const url = `/api/documents/${documentId}/file`;
   return (
@@ -17,7 +18,7 @@ export function DocumentViewer({ documentId, mimeType, height = "70vh" }: { docu
         <a className="btn btn-ghost btn-sm" href={url} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open</a>
       </div>
       {mimeType === "application/pdf" ? (
-        <iframe title="Document" src={url} className="h-full w-full bg-white" />
+        <iframe key={page ?? 0} title="Document" src={page ? `${url}#page=${page}` : url} className="h-full w-full bg-white" />
       ) : mimeType.startsWith("image/") && mimeType !== "image/tiff" && mimeType !== "image/heic" ? (
         <div className="flex-1 overflow-auto p-3">
           <img src={url} alt="Document" style={{ transform: `scale(${zoom})`, transformOrigin: "top left" }} className="max-w-full bg-white shadow" />

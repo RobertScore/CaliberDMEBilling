@@ -36,6 +36,10 @@ describe("client separation", () => {
 
     await owner.post("/api/session/client").send({ clientId: ctx.pacific }).expect(200);
     expect(((await owner.get("/api/patients?q=ONLYINSCORE").expect(200)).body as P[]).length).toBe(0);
+    // Searching by first name, or "first last", doesn't cross clients either.
+    const firstName = created.firstName as string;
+    expect(((await owner.get(`/api/patients?q=${encodeURIComponent(firstName)}`).expect(200)).body as P[]).some((p) => p.lastName === "ONLYINSCORE")).toBe(false);
+    expect(((await owner.get(`/api/patients?q=${encodeURIComponent(`${firstName} ONLYINSCORE`)}`).expect(200)).body as P[]).length).toBe(0);
     // The same numeric ID in the other client is a different record (or nothing at all).
     const res = await owner.get(`/api/patients/${created.id}`);
     if (res.status === 200) expect(res.body.lastName).not.toBe("ONLYINSCORE");

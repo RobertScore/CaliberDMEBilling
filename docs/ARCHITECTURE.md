@@ -92,6 +92,14 @@ staff upload / scan ─┘      with the client's key)          a "how sure" lev
 - `server/lib/match.ts` looks for an existing patient **inside that one client
   only** (date of birth, name, SSN last 4, phone, claim number, member ID).
   A strong match must be explicitly dismissed before a new patient is created.
+- **Packets are split into parts.** A fax is usually one PDF holding many documents. The reader suggests
+  page ranges (Rx, delivery ticket, RFA...) and flags pages that are cover sheets or about someone else;
+  the reviewer adjusts them. On filing, each part is cut into its own PDF (`server/lib/pdfPages.ts`,
+  pdf-lib, runs on our server) and filed to the patient. The full packet stays with the Inbox item, never
+  on the patient's file, so a misfiled page about someone else can't end up in this patient's documents.
+- **Existing patients and insurance slots.** When paperwork is filed to an existing patient, each
+  insurance read from it goes where the reviewer chooses: a new claim in an empty slot, an update to a
+  claim on file (new values laid over old), a full replacement, or not saved.
 - Each patient's **ready-to-bill checklist** compares the verified documents on
   file with Settings → Required documents for the patient's payer types.
 

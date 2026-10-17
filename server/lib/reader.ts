@@ -50,7 +50,12 @@ Extract only what is actually written. Never guess or fill in a value that isn't
 - ICD-10 diagnosis codes and HCPCS codes exactly as written (e.g. M25.561, E0218).
 - payerTypeGuess: WC for workers' comp carriers/TPAs; VA_DIRECT for the VA itself; VA_CCN for VA community care
   administrators; otherwise MEDICARE, MEDICAID, COMMERCIAL, SELF_PAY or UNKNOWN.
-- For each file (in the order given, index from 0) give the best document type from: ${DOC_TYPES.map((d) => d.code).join(", ")}.`;
+- For each file (in the order given, index from 0) give the best document type from: ${DOC_TYPES.map((d) => d.code).join(", ")}.
+- sections: split every file into its separate documents by page (pages numbered from 1 within each file, ranges
+  inclusive, no overlaps, every page in exactly one section). Use the same document types (never "packet").
+  belongsTo: "this_patient" for the patient's own documents, "other_patient" for a page about someone else,
+  "none" for fax cover sheets, blank pages, ads and surveys. A duplicate page is its own section with a summary
+  saying it's a duplicate. An upside-down page still gets a section.`;
 
 let client: Anthropic | null = null;
 

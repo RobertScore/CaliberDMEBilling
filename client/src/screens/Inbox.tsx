@@ -1,8 +1,8 @@
 // The Inbox: faxes, emails and uploads land here. The reader fills in what it can; a person checks every
 // value against the paper, decides "new patient" or "existing patient", and files it.
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, Bot, CheckCircle2, FileText, Inbox, Loader2, Mail, Printer, RefreshCw, Sparkles, Upload, UserCheck, UserPlus, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowRight, Bot, Search, CheckCircle2, FileText, Inbox, Loader2, Mail, Printer, RefreshCw, Sparkles, Upload, UserCheck, UserPlus, XCircle } from "lucide-react";
 import { ApiError, get, post, uploadFiles } from "@/lib/api";
 import { useNav } from "@/lib/nav";
 import { useSession } from "@/lib/session";
@@ -11,7 +11,8 @@ import { Page } from "@/components/Shell";
 import { Badge, EmptyState, useToast } from "@/components/ui";
 import { ErrorBox, Modal, Select } from "@/components/inputs";
 import { DocumentViewer } from "@/components/DocumentViewer";
-import { DOC_TYPES, type Extraction, type ExtractedField } from "@shared/documents";
+import { PacketParts, checkParts, initialParts, splittable, type Part } from "@/components/PacketParts";
+import type { Extraction, ExtractedField } from "@shared/documents";
 import { PAYER_TYPES } from "@shared/picklists";
 import { isoToDisplay } from "@shared/dates";
 
@@ -173,7 +174,10 @@ export function IntakeReview({ id }: { id: number }) {
   const [conf, setConf] = useState<Record<string, string>>({});
   const [ins, setIns] = useState<InsForm[]>([]);
   const [coverage, setCoverage] = useState("WC");
-  const [docs, setDocs] = useState<Record<number, { docType: string; verified: boolean }>>({});
+  const [parts, setParts] = useState<Record<number, Part[]>>({});
+  const [viewPage, setViewPage] = useState<number | undefined>();
+  const [slots, setSlots] = useState<Record<number, string>>({}); // existing patient: where each read insurance goes
+  const [chosen, setChosen] = useState<{ id: number; label: string } | null>(null); // picked by search, not suggested
   const [decision, setDecision] = useState<"new" | "existing" | null>(null);
   const [pick, setPick] = useState<number | null>(null);
   const [applyUpdates, setApplyUpdates] = useState(false);
@@ -202,14 +206,36 @@ export function IntakeReview({ id }: { id: number }) {
     }));
     const t = e?.insurances[0]?.payerTypeGuess;
     if (t && t !== "UNKNOWN") setCoverage(t);
-    setDocs(Object.fromEntries(item.documents.map((d) => [d.id, { docType: d.docType, verified: !!d.verifiedAt }])));
+    setParts(Object.fromEntries(item.documents.map((d, i) => [d.id, initialParts(d, i, e)])));
+    setSlots({});
     const top = item.matches[0];
     if (top && top.score >= 80) { setDecision("existing"); setPick(top.patientId); }
     else if (top) { setDecision(null); setPick(null); }
     else setDecision("new");
   }, [item, payers.data, loadedFor]);
 
-  const allVerified = item ? item.documents.every((d) => docs[d.id]?.verified) : false;
+  // Existing patient: what's on file now, so the reviewer can choose where each insurance / claim goes.
+  const existing = useQuery({
+    queryKey: ["patient", pick],
+    queryFn: () => get<{ firstName: string; lastName: string; dob: string; sex: string; insurances: { rank: number; payerName: string; payerType: string; claimNumber: string | null; referralNumber: string | null; authorizationNumber: string | null }[] }>(`/api/patients/${pick}`),
+    enabled: decision === "existing" && !!pick,
+  });
+  const onFile = existing.data?.insurances ?? [];
+  const norm = (v?: string | null) => (v ?? "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+  const defaultSlot = (i: InsForm, n: number) => {
+    const same = onFile.find((f) => (norm(i.values.claimNumber) && norm(f.claimNumber) === norm(i.values.claimNumber)) || (norm(i.values.referralNumber) && norm(f.referralNumber) === norm(i.values.referralNumber)));
+    if (same) return `update:${same.rank}`;
+    const taken = new Set([...onFile.map((f) => f.rank), ...ins.slice(0, n).map((x, k) => Number((slots[k] ?? "").split(":")[1]) || 0)]);
+    const free = [1, 2, 3].find((r) => !taken.has(r));
+    return free ? `add:${free}` : "skip";
+  };
+  const slotOf = (n: number) => slots[n] ?? defaultSlot(ins[n], n);
+  const planned = ins.map((i, n) => ({ i, n, slot: slotOf(n) })).filter((x) => x.slot !== "skip");
+  const slotClash = new Set(planned.map((x) => x.slot.split(":")[1])).size !== planned.length;
+
+  const fileParts = item ? item.documents.flatMap((d) => (parts[d.id] ?? []).filter((p) => !p.skip)) : [];
+  const allVerified = fileParts.every((p) => p.verified);
+  const partErrors = item ? item.documents.flatMap((d) => (splittable(d) ? checkParts(d, parts[d.id] ?? []).errors : [])) : [];
   const patientPayload = useMemo(() => {
     const p: Record<string, unknown> = { coverageType: coverage };
     for (const k of PATIENT_FIELDS) if (fields[k.key]?.trim()) p[k.key] = fields[k.key].trim();
@@ -223,21 +249,40 @@ export function IntakeReview({ id }: { id: number }) {
     return p;
   }, [fields, ins, coverage]);
 
+  /** Existing patient: only the insurances going into chosen slots, plus the details if "also update" is ticked. */
+  function existingPayload() {
+    const { insurances: _ignored, coverageType: _c, ...details } = patientPayload as Record<string, unknown>;
+    const who = existing.data;
+    const insurances = planned.map(({ i, slot }) => {
+      const [mode, rank] = slot.split(":");
+      const o: Record<string, unknown> = { rank: Number(rank), payerId: i.payerId, relationshipToInsured: "18" };
+      if (mode !== "update" && who) Object.assign(o, { subscriberLastName: who.lastName, subscriberFirstName: who.firstName, subscriberDob: who.dob, subscriberSex: who.sex });
+      for (const [k] of INS_FIELDS) if (i.values[k]?.trim()) o[k] = i.values[k].trim();
+      return o;
+    });
+    return { ...(applyUpdates ? details : {}), insurances };
+  }
+
   const complete = useMutation({
     mutationFn: () =>
       post<{ patientId: number }>(`/api/intake/${id}/complete`, {
         decision,
         patientId: decision === "existing" ? pick ?? undefined : undefined,
-        patient: decision === "new" || applyUpdates ? patientPayload : undefined,
+        patient: decision === "new" ? patientPayload : existingPayload(),
         applyUpdates: decision === "existing" && applyUpdates,
+        replaceRanks: decision === "existing" ? planned.filter((x) => x.slot.startsWith("replace")).map((x) => Number(x.slot.split(":")[1])) : [],
         confirmNotDuplicate: notDup,
-        documents: item!.documents.map((d) => ({ id: d.id, docType: docs[d.id]?.docType ?? d.docType, verified: !!docs[d.id]?.verified })),
+        documents: item!.documents.map((d) => {
+          const ps = parts[d.id] ?? [];
+          if (splittable(d)) return { id: d.id, docType: ps[0]?.docType ?? "other", verified: false, sections: ps.map(({ fromPage, toPage, docType, verified, skip }) => ({ fromPage, toPage, docType, verified, skip })) };
+          return { id: d.id, docType: ps[0]?.docType ?? d.docType, verified: !!ps[0]?.verified };
+        }),
         note: note.trim() || undefined,
       }),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["intake"] });
       toast(decision === "new" ? "New patient created and paperwork filed." : "Paperwork filed to the patient.");
-      const label = decision === "existing" ? (() => { const m = item!.matches.find((x) => x.patientId === pick); return m ? `${m.lastName}, ${m.firstName}` : "Patient"; })() : `${fields.lastName}, ${fields.firstName}`;
+      const label = decision === "existing" ? (() => { const m = item!.matches.find((x) => x.patientId === pick); return m ? `${m.lastName}, ${m.firstName}` : chosen?.label ?? "Patient"; })() : `${fields.lastName}, ${fields.firstName}`;
       nav.openPatient(r.patientId, label, "overview");
     },
   });
@@ -249,8 +294,32 @@ export function IntakeReview({ id }: { id: number }) {
   const handled = item.status === "done" || item.status === "rejected";
   const current = item.documents[docIdx] ?? item.documents[0];
   const isDupError = complete.error instanceof ApiError && complete.error.status === 409 && decision === "new";
-  const missingRequired = decision === "new" || applyUpdates ? PATIENT_FIELDS.filter((f) => f.required && !fields[f.key]?.trim()).map((f) => f.label) : [];
-  const canFile = !handled && decision && (decision === "new" || pick) && missingRequired.length === 0;
+  const missingRequired = decision === "new" ? PATIENT_FIELDS.filter((f) => f.required && !fields[f.key]?.trim()).map((f) => f.label) : [];
+  const insProblems = decision === "existing" ? [...(slotClash ? ["Two insurances are going into the same slot."] : []), ...(planned.some((x) => !x.i.payerId) ? ["Choose the payer for each insurance you're saving."] : [])] : [];
+  const canFile = !handled && decision && (decision === "new" || pick) && missingRequired.length === 0 && partErrors.length === 0 && insProblems.length === 0;
+  let step = 1;
+  const insCard = (i: InsForm, n: number, top?: ReactNode) => (
+<div key={n} className="mb-3 rounded-lg border border-slate-200 p-3">
+{top}
+                    <div className="mb-2 grid grid-cols-3 gap-3">
+                      <label className="field col-span-2">
+                        <span className="label">{decision === "new" ? `${["Primary", "Secondary", "Tertiary"][i.rank - 1]} payer` : "Payer"}{i.payerGuess ? ` (paper says “${i.payerGuess}”)` : ""}</span>
+                        <select className={`input ${!i.payerId ? "border-red-300" : confRing(i.conf.payer)}`} value={i.payerId || ""} disabled={handled} onChange={(e) => setIns((x) => x.map((y, m) => (m === n ? { ...y, payerId: Number(e.target.value) } : y)))}>
+                          <option value="">Choose the payer…</option>
+                          {payers.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      {INS_FIELDS.map(([k, label]) => (
+                        <label key={k} className="field">
+                          <span className="label">{label}</span>
+                          <input className={`input ${confRing(i.conf[k])}`} value={i.values[k]} disabled={handled} onChange={(e) => setIns((x) => x.map((y, m) => (m === n ? { ...y, values: { ...y.values, [k]: e.target.value }, conf: { ...y.conf, [k]: "" } } : y)))} />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+  );
 
   return (
     <div className="flex h-full min-h-[calc(100vh-2rem)] flex-col xl:flex-row">
@@ -264,13 +333,13 @@ export function IntakeReview({ id }: { id: number }) {
         {item.documents.length > 1 && (
           <div className="mb-2 flex flex-wrap gap-1">
             {item.documents.map((d, i) => (
-              <button key={d.id} onClick={() => setDocIdx(i)} className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs ${i === docIdx ? "bg-navy-800 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
-                {docs[d.id]?.verified ? <CheckCircle2 size={12} /> : <FileText size={12} />} File {i + 1}
+              <button key={d.id} onClick={() => { setDocIdx(i); setViewPage(undefined); }} className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs ${i === docIdx ? "bg-navy-800 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}>
+                {(parts[d.id] ?? []).every((p) => p.skip || p.verified) ? <CheckCircle2 size={12} /> : <FileText size={12} />} File {i + 1}{d.pageCount && d.pageCount > 1 ? ` (${d.pageCount} pages)` : ""}
               </button>
             ))}
           </div>
         )}
-        {current && <DocumentViewer documentId={current.id} mimeType={current.mimeType} height="calc(100vh - 150px)" />}
+        {current && <DocumentViewer documentId={current.id} mimeType={current.mimeType} height="calc(100vh - 150px)" page={viewPage} />}
       </div>
 
       {/* The review, on the right */}
@@ -296,12 +365,12 @@ export function IntakeReview({ id }: { id: number }) {
 
             {/* 1. New or existing? */}
             <section className="card p-5">
-              <div className="mb-3 font-semibold text-slate-900">1. Is this a new patient or one we already have?</div>
+              <div className="mb-3 font-semibold text-slate-900">{step++}. Is this a new patient or one we already have?</div>
               {item.matches.length > 0 ? (
                 <div className="space-y-2">
                   {item.matches.map((m) => (
                     <label key={m.patientId} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 ${decision === "existing" && pick === m.patientId ? "border-navy-400 bg-navy-50" : "border-slate-200 hover:bg-slate-50"}`}>
-                      <input type="radio" checked={decision === "existing" && pick === m.patientId} onChange={() => { setDecision("existing"); setPick(m.patientId); }} disabled={handled} />
+                      <input type="radio" checked={decision === "existing" && pick === m.patientId} onChange={() => { setDecision("existing"); setPick(m.patientId); setSlots({}); }} disabled={handled} />
                       <UserCheck size={16} className="text-navy-600" />
                       <span className="flex-1">
                         <span className="font-medium text-slate-900">{m.lastName}, {m.firstName}</span>
@@ -315,6 +384,19 @@ export function IntakeReview({ id }: { id: number }) {
               ) : (
                 <div className="mb-2 text-sm text-slate-500">No one in this client matches the name, date of birth, SSN, phone or claim number.</div>
               )}
+              {chosen && !item.matches.some((m) => m.patientId === chosen.id) && (
+                <label className={`mt-2 flex cursor-pointer items-center gap-3 rounded-lg border p-3 ${decision === "existing" && pick === chosen.id ? "border-navy-400 bg-navy-50" : "border-slate-200 hover:bg-slate-50"}`}>
+                  <input type="radio" checked={decision === "existing" && pick === chosen.id} onChange={() => { setDecision("existing"); setPick(chosen.id); }} disabled={handled} />
+                  <UserCheck size={16} className="text-navy-600" />
+                  <span className="flex-1 font-medium text-slate-900">{chosen.label}</span>
+                  <Badge tone="navy">Picked by you</Badge>
+                </label>
+              )}
+              {!handled && (
+                <button className="btn btn-ghost btn-sm mt-2" onClick={() => nav.pickPatient("File this paperwork to…", (pid, label) => { setChosen({ id: pid, label }); setDecision("existing"); setPick(pid); setSlots({}); })}>
+                  <Search size={14} /> Pick a different existing patient…
+                </button>
+              )}
               <label className={`mt-2 flex cursor-pointer items-center gap-3 rounded-lg border p-3 ${decision === "new" ? "border-accent-400 bg-accent-50" : "border-slate-200 hover:bg-slate-50"}`}>
                 <input type="radio" checked={decision === "new"} onChange={() => { setDecision("new"); setPick(null); }} disabled={handled} />
                 <UserPlus size={16} className="text-accent-700" />
@@ -323,7 +405,7 @@ export function IntakeReview({ id }: { id: number }) {
               {decision === "existing" && (
                 <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
                   <input type="checkbox" checked={applyUpdates} onChange={(e) => setApplyUpdates(e.target.checked)} disabled={handled} />
-                  Also update this patient's file with the details below (filled-in values replace what's on file)
+                  Also update this patient's name, address, phone and other details (filled-in values replace what's on file)
                 </label>
               )}
             </section>
@@ -331,7 +413,7 @@ export function IntakeReview({ id }: { id: number }) {
             {/* 2. Patient details */}
             {(decision === "new" || applyUpdates) && (
               <section className="card p-5">
-                <div className="mb-3 font-semibold text-slate-900">2. Patient details</div>
+                <div className="mb-3 font-semibold text-slate-900">{step++}. Patient details</div>
                 <div className="grid grid-cols-3 gap-3">
                   {PATIENT_FIELDS.map((f) => (
                     <label key={f.key} className={`field ${f.span ?? ""}`}>
@@ -339,38 +421,21 @@ export function IntakeReview({ id }: { id: number }) {
                       <input className={`input ${confRing(conf[f.key])}`} value={fields[f.key] ?? ""} disabled={handled} onChange={(e) => { setFields((x) => ({ ...x, [f.key]: e.target.value })); setConf((c) => ({ ...c, [f.key]: "" })); }} />
                     </label>
                   ))}
-                  <label className="field">
-                    <span className="label">Main coverage <span className="text-red-500">*</span></span>
-                    <Select value={coverage} onChange={setCoverage} options={PAYER_TYPES} disabled={handled} />
-                  </label>
+                  {decision === "new" && (
+                    <label className="field">
+                      <span className="label">Main coverage <span className="text-red-500">*</span></span>
+                      <Select value={coverage} onChange={setCoverage} options={PAYER_TYPES} disabled={handled} />
+                    </label>
+                  )}
                 </div>
-
+                {decision === "new" && <>
                 <div className="mt-5 mb-2 text-sm font-semibold text-slate-800">Insurance</div>
                 {ins.length === 0 && <div className="text-sm text-slate-400">No insurance was read. Add it now or later on the patient's file.</div>}
-                {ins.map((i, n) => (
-                  <div key={i.rank} className="mb-3 rounded-lg border border-slate-200 p-3">
-                    <div className="mb-2 grid grid-cols-3 gap-3">
-                      <label className="field col-span-2">
-                        <span className="label">{["Primary", "Secondary", "Tertiary"][i.rank - 1]} payer{i.payerGuess ? ` (paper says “${i.payerGuess}”)` : ""}</span>
-                        <select className={`input ${!i.payerId ? "border-red-300" : confRing(i.conf.payer)}`} value={i.payerId || ""} disabled={handled} onChange={(e) => setIns((x) => x.map((y, m) => (m === n ? { ...y, payerId: Number(e.target.value) } : y)))}>
-                          <option value="">Choose the payer…</option>
-                          {payers.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                      </label>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3">
-                      {INS_FIELDS.map(([k, label]) => (
-                        <label key={k} className="field">
-                          <span className="label">{label}</span>
-                          <input className={`input ${confRing(i.conf[k])}`} value={i.values[k]} disabled={handled} onChange={(e) => setIns((x) => x.map((y, m) => (m === n ? { ...y, values: { ...y.values, [k]: e.target.value }, conf: { ...y.conf, [k]: "" } } : y)))} />
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                {ins.map((i, n) => insCard(i, n))}
                 {!handled && ins.length < 3 && (
                   <button className="btn btn-sm" onClick={() => setIns((x) => [...x, { rank: x.length + 1, payerId: 0, payerGuess: "", values: Object.fromEntries(INS_FIELDS.map(([k]) => [k, ""])) as Record<InsKey, string>, conf: {} }])}>+ Add insurance</button>
                 )}
+                </>}
                 {(item.extraction?.diagnosisCodes.length || item.extraction?.hcpcsCodes.length || item.extraction?.orderingPhysician.value) ? (
                   <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
                     <div className="mb-1 font-medium text-slate-700">Also read (use when posting charges)</div>
@@ -382,23 +447,67 @@ export function IntakeReview({ id }: { id: number }) {
               </section>
             )}
 
-            {/* 3. Documents */}
-            <section className="card p-5">
-              <div className="mb-1 font-semibold text-slate-900">{decision === "new" || applyUpdates ? "3" : "2"}. What's in the packet?</div>
-              <p className="mb-3 text-xs text-slate-500">Check each file's type. Tick “verified” only when it's the right document, complete and readable. Verified documents count toward the ready-to-bill checklist.</p>
-              <div className="space-y-2">
-                {item.documents.map((d, i) => (
-                  <div key={d.id} className={`flex flex-wrap items-center gap-3 rounded-lg border p-2.5 ${i === docIdx ? "border-navy-300" : "border-slate-200"}`}>
-                    <button className="text-xs font-medium text-navy-700 hover:underline" onClick={() => setDocIdx(i)}>File {i + 1}</button>
-                    <span className="min-w-0 flex-1 truncate text-xs text-slate-500">{d.originalName}{item.extraction?.documents.find((x) => x.index === i)?.summary ? ` · ${item.extraction.documents.find((x) => x.index === i)!.summary}` : ""}</span>
-                    <div className="w-64">
-                      <Select value={docs[d.id]?.docType ?? d.docType} onChange={(v) => setDocs((x) => ({ ...x, [d.id]: { ...x[d.id], docType: v } }))} options={DOC_TYPES} disabled={handled} />
-                    </div>
-                    <label className="flex items-center gap-1.5 text-sm">
-                      <input type="checkbox" checked={!!docs[d.id]?.verified} disabled={handled} onChange={(e) => setDocs((x) => ({ ...x, [d.id]: { ...x[d.id], verified: e.target.checked } }))} /> Verified
+            {/* Existing patient: where each insurance / claim goes */}
+            {decision === "existing" && pick && (
+              <section className="card p-5">
+                <div className="mb-1 font-semibold text-slate-900">{step++}. Insurance and claims</div>
+                <p className="mb-3 text-xs text-slate-500">Choose where each insurance from the paperwork goes. "Add" puts a new claim in an empty slot (e.g. a second injury). "Update" adds new details, like a new authorization number, to a claim on file. "Replace" overwrites a slot completely.</p>
+                <div className="mb-3 rounded-lg bg-slate-50 p-3 text-xs">
+                  <div className="mb-1 font-medium text-slate-700">On file now</div>
+                  {[1, 2, 3].map((r) => {
+                    const f = onFile.find((x) => x.rank === r);
+                    return <div key={r} className="text-slate-600">Slot {r}: {f ? `${f.payerName}${f.claimNumber ? ` · claim ${f.claimNumber}` : ""}${f.referralNumber ? ` · referral ${f.referralNumber}` : ""}${f.authorizationNumber ? ` · auth ${f.authorizationNumber}` : ""}` : <span className="text-slate-400">empty</span>}</div>;
+                  })}
+                </div>
+                {ins.length === 0 && <div className="text-sm text-slate-400">No insurance was read from this paperwork.</div>}
+                {ins.map((i, n) =>
+                  insCard(i, n, (
+                    <label className="field mb-2">
+                      <span className="label">Where should this go?</span>
+                      <select className="input" value={slotOf(n)} disabled={handled} onChange={(e) => setSlots((x) => ({ ...x, [n]: e.target.value }))}>
+                        <option value="skip">Don't save this insurance</option>
+                        {[1, 2, 3].map((r) => {
+                          const f = onFile.find((x) => x.rank === r);
+                          return f ? (
+                            <optgroup key={r} label={`Slot ${r}: ${f.payerName}${f.claimNumber ? ` (claim ${f.claimNumber})` : ""}`}>
+                              <option value={`update:${r}`}>Update slot {r} (same claim; keep what's on file)</option>
+                              <option value={`replace:${r}`}>Replace slot {r} completely</option>
+                            </optgroup>
+                          ) : (
+                            <option key={r} value={`add:${r}`}>Add as a new claim in empty slot {r}</option>
+                          );
+                        })}
+                      </select>
                     </label>
-                  </div>
-                ))}
+                  )),
+                )}
+                {!handled && ins.length < 3 && (
+                  <button className="btn btn-sm" onClick={() => setIns((x) => [...x, { rank: x.length + 1, payerId: 0, payerGuess: "", values: Object.fromEntries(INS_FIELDS.map(([k]) => [k, ""])) as Record<InsKey, string>, conf: {} }])}>+ Add insurance</button>
+                )}
+                {insProblems.map((m) => <div key={m} className="mt-2 text-xs text-red-600">{m}</div>)}
+              </section>
+            )}
+
+            {/* Documents */}
+            <section className="card p-5">
+              <div className="mb-1 font-semibold text-slate-900">{step++}. What's in the packet?</div>
+              <p className="mb-3 text-xs text-slate-500">
+                Each part becomes its own document on the patient's file, so the ready-to-bill checklist can see it. Check the pages and type of each part; tick "Verified" only when it's the right document, complete and readable.
+                Set aside anything that isn't for this patient (cover sheets, junk, someone else's page). The full packet is always kept with this Inbox item.
+              </p>
+              <div className="space-y-4">
+                {item.documents.filter((d) => !d.parentDocumentId).map((d) => {
+                  const i = item.documents.indexOf(d);
+                  return (
+                    <div key={d.id}>
+                      <div className="mb-1.5 flex items-center gap-2 text-xs">
+                        <button className={`font-medium ${i === docIdx ? "text-navy-800" : "text-navy-600 hover:underline"}`} onClick={() => { setDocIdx(i); setViewPage(undefined); }}>File {i + 1}</button>
+                        <span className="truncate text-slate-500">{d.originalName}{d.pageCount ? ` · ${d.pageCount} page${d.pageCount === 1 ? "" : "s"}` : ""}</span>
+                      </div>
+                      <PacketParts doc={d} parts={parts[d.id] ?? []} onChange={(ps) => setParts((x) => ({ ...x, [d.id]: ps }))} onView={(pg) => { setDocIdx(i); setViewPage(pg); }} disabled={handled} />
+                    </div>
+                  );
+                })}
               </div>
             </section>
 

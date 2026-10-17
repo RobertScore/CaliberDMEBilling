@@ -14,6 +14,7 @@ export const DOC_TYPES = [
   { code: "referral", label: "VA referral" },
   { code: "eob", label: "EOB / remittance" },
   { code: "other", label: "Other" },
+  { code: "packet", label: "Full packet (as received)" },
 ] as const;
 export type DocType = (typeof DOC_TYPES)[number]["code"];
 export const docTypeLabel = (c: string) => DOC_TYPES.find((d) => d.code === c)?.label ?? c;
@@ -67,9 +68,35 @@ export const extraction = z.object({
   diagnosisCodes: z.array(z.string()),
   hcpcsCodes: z.array(z.string()),
   documents: z.array(z.object({ index: z.number().int(), docType: z.string(), confidence: conf, summary: z.string() })),
+  // How each file splits into separate documents, by page (1-based, inclusive).
+  // belongsTo: "this_patient", "other_patient" (misfiled page about someone else) or "none" (cover sheet, blank, junk).
+  sections: z.array(
+    z.object({
+      fileIndex: z.number().int(),
+      fromPage: z.number().int(),
+      toPage: z.number().int(),
+      docType: z.string(),
+      belongsTo: z.enum(["this_patient", "other_patient", "none"]),
+      confidence: conf,
+      summary: z.string(),
+    }),
+  ),
   readerNotes: z.string(), // anything the reader couldn't make out, in plain words
 });
 export type Extraction = z.infer<typeof extraction>;
 export type ExtractedField = z.infer<typeof field>;
+
+/** One part of a packet, as the reviewer confirmed it when filing. */
+export const sectionInput = z
+  .object({
+    fromPage: z.number().int().min(1),
+    toPage: z.number().int().min(1),
+    docType: z.enum(DOC_TYPES.map((d) => d.code) as [string, ...string[]]),
+    verified: z.boolean(),
+    skip: z.boolean().default(false), // not for this patient (cover sheet, junk, someone else's page)
+  })
+  .strict()
+  .refine((s) => s.toPage >= s.fromPage, "A section's last page can't come before its first page");
+export type SectionInput = z.infer<typeof sectionInput>;
 
 export const emptyField = (): ExtractedField => ({ value: null, confidence: "low" });

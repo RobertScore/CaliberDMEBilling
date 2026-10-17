@@ -9,6 +9,7 @@ import { ALLOWED_UPLOAD_TYPES, DOC_TYPES, MAX_UPLOAD_BYTES, docTypeLabel } from 
 import { getControlDb } from "../db/control";
 import { getFile, putFile, sha256 } from "../lib/fileStore";
 import { publish } from "../lib/events";
+import { pdfPageCount } from "../lib/pdfPages";
 import { HttpError, audit, requireAuth, requireClient, requirePermission } from "../middleware";
 import { loadPatientOr404 } from "./patients";
 import type { Tenant } from "../db/tenantDb";
@@ -51,6 +52,7 @@ export async function storeFiles(
         storageKey,
         source: meta.source,
         uploadedBy: meta.uploadedBy ?? req.user!.initials,
+        pageCount: f.mimetype === "application/pdf" ? await pdfPageCount(f.buffer) : 1,
       })
       .returning();
     rows.push(d);

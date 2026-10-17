@@ -13,7 +13,8 @@ import { isoToDisplay } from "@shared/dates";
 
 const RANKS = ["Primary", "Secondary", "Tertiary"];
 
-function InsuranceCard({ ins, rank, onAdd }: { ins?: O["patient"]["insurances"][number]; rank: number; onAdd: () => void }) {
+/** Several Work Comp claims are separate injuries, not primary/secondary coverage, so they're labeled as claims. */
+function InsuranceCard({ ins, rank, onAdd, wcClaims = 0 }: { ins?: O["patient"]["insurances"][number]; rank: number; onAdd: () => void; wcClaims?: number }) {
   if (!ins)
     return (
       <button onClick={onAdd} className="flex min-h-[140px] flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-navy-300 hover:text-navy-700">
@@ -35,7 +36,7 @@ function InsuranceCard({ ins, rank, onAdd }: { ins?: O["patient"]["insurances"][
   return (
     <div className="card p-4">
       <div className="flex items-center gap-2">
-        <span className="text-2xs font-semibold uppercase tracking-wider text-slate-400">{RANKS[rank - 1]}</span>
+        <span className="text-2xs font-semibold uppercase tracking-wider text-slate-400">{ins.payerType === "WC" && wcClaims > 1 ? `Work Comp claim ${rank}` : RANKS[rank - 1]}</span>
         {ins.payerType && <CoverageBadge type={ins.payerType} />}
         {expired && <Badge tone="red">Eligibility ended</Badge>}
       </div>
@@ -108,7 +109,7 @@ export function Overview({ o, go, onOpenDoc, compact, narrow }: { o: O; go: (s: 
     <div className="space-y-5">
       {/* Side by side there's less room: show only the insurances on file, plus one "add" box. */}
       <div className={`grid gap-4 ${compact ? "grid-cols-1" : narrow ? "grid-cols-2" : "grid-cols-1 md:grid-cols-3"}`}>
-        {[1, 2, 3].filter(showCard).map((r) => <InsuranceCard key={r} rank={r} ins={ins(r)} onAdd={() => go("details")} />)}
+        {[1, 2, 3].filter(showCard).map((r) => <InsuranceCard key={r} rank={r} ins={ins(r)} onAdd={() => go("details")} wcClaims={o.patient.insurances.filter((i) => i.payerType === "WC").length} />)}
       </div>
 
       <div className={`grid gap-5 ${compact || narrow ? "grid-cols-1" : "grid-cols-1 xl:grid-cols-[1fr_340px]"}`}>

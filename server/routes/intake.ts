@@ -3,9 +3,10 @@ import { Router, type Request } from "express";
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { documents, intakeItems, notes, patients } from "@shared/schema/tenant";
-import { DOC_TYPES, INTAKE_SOURCES, docTypeLabel, type Extraction } from "@shared/documents";
-import { patientInput, type PatientInput } from "@shared/validation";
-import { getFile } from "../lib/fileStore";
+import { DOC_TYPES, INTAKE_SOURCES, docTypeLabel, sectionInput, type Extraction, type SectionInput } from "@shared/documents";
+import { insuranceInput, patientInput, type PatientInput } from "@shared/validation";
+import { getFile, putFile, sha256 } from "../lib/fileStore";
+import { extractPages, pdfPageCount } from "../lib/pdfPages";
 import { readPaperwork } from "../lib/reader";
 import { findMatches, type MatchInput } from "../lib/match";
 import { demoPacket } from "../lib/demoPaperwork";
@@ -138,6 +139,13 @@ intakeRouter.get("/api/intake/:id", requirePermission("intake.process"), async (
   const [item] = await req.tenant!.db.select().from(intakeItems).where(eq(intakeItems.id, id));
   if (!item) throw new HttpError(404, "Not found");
   const docs = await req.tenant!.db.select().from(documents).where(eq(documents.intakeId, id));
+  // Files uploaded before page counts were recorded: count them now so they can be split.
+  for (const d of docs) {
+    if (d.mimeType === "application/pdf" && d.pageCount == null) {
+      d.pageCount = await pdfPageCount(getFile(req.tenant!, d.storageKey));
+      if (d.pageCount) await req.tenant!.db.update(documents).set({ pageCount: d.pageCount }).where(eq(documents.id, d.id));
+    }
+  }
   const matches = item.status === "review" ? await findMatches(req.tenant!, matchInputFrom(item.extraction as Extraction | null)) : [];
   if (item.suggestedPatientId && !matches.some((m) => m.patientId === item.suggestedPatientId)) {
     const [p] = await req.tenant!.db.select().from(patients).where(eq(patients.id, item.suggestedPatientId));
@@ -166,16 +174,37 @@ const completeInput = z
   .object({
     decision: z.enum(["new", "existing"]),
     patientId: z.number().int().positive().optional(),
-    patient: patientInput.optional(),
-    applyUpdates: z.boolean().default(false),
+    // New patient: the full details. Existing patient: only what should change (see applyUpdates / insurances).
+    patient: z.unknown().optional(),
+    applyUpdates: z.boolean().default(false), // existing patient: also update name, address, phone...
+    replaceRanks: z.array(z.number().int().min(1).max(3)).default([]), // existing patient: insurance slots to overwrite, not merge
     confirmNotDuplicate: z.boolean().default(false),
-    documents: z.array(z.object({ id: z.number().int().positive(), docType: z.enum(DOC_TYPES.map((d) => d.code) as [string, ...string[]]), verified: z.boolean() }).strict()).min(1),
+    documents: z
+      .array(
+        z
+          .object({
+            id: z.number().int().positive(),
+            docType: z.enum(DOC_TYPES.map((d) => d.code) as [string, ...string[]]),
+            verified: z.boolean(),
+            sections: z.array(sectionInput).max(60).optional(),
+          })
+          .strict(),
+      )
+      .min(1),
     note: z.string().trim().max(2000).optional(),
   })
   .strict();
 
-/** Merge reviewed values over what's on file (only non-empty values replace; insurance by rank). */
-async function mergeIntoExisting(req: Request, id: number, reviewed: PatientInput): Promise<PatientInput> {
+// What an existing patient's file may be updated with: any subset of the fields, plus insurances by slot.
+const existingUpdate = patientInput.partial().extend({ insurances: z.array(insuranceInput).max(3).default([]) });
+type ExistingUpdate = z.infer<typeof existingUpdate>;
+
+/**
+ * Merge reviewed values over what's on file. Only non-empty values replace. Insurance goes by slot (rank):
+ * a slot listed in replaceRanks is overwritten completely (a different claim); otherwise the new values are
+ * laid over the old ones (same claim, e.g. a new authorization number).
+ */
+async function mergeIntoExisting(req: Request, id: number, reviewed: ExistingUpdate, replaceRanks: number[]): Promise<PatientInput> {
   const cur = await patientView(req, id);
   const keys = Object.keys(patientInput.shape) as (keyof PatientInput)[];
   const base: Record<string, unknown> = {};
@@ -184,9 +213,27 @@ async function mergeIntoExisting(req: Request, id: number, reviewed: PatientInpu
   const insKeys = ["rank", "payerId", "claimNumber", "copayCents", "deductibleCents", "eligibleFrom", "eligibleTo", "relationshipToInsured", "subscriberLastName", "subscriberFirstName", "subscriberDob", "subscriberSex", "groupNumber", "groupName", "dateOfInjury", "employerName", "adjusterName", "adjusterPhone", "referralNumber", "authorizationNumber"];
   const byRank = new Map<number, Record<string, unknown>>();
   for (const i of cur.insurances) byRank.set(i.rank, Object.fromEntries(insKeys.filter((k) => (i as Record<string, unknown>)[k] != null).map((k) => [k, (i as Record<string, unknown>)[k]])));
-  for (const i of reviewed.insurances) byRank.set(i.rank, { ...(byRank.get(i.rank) ?? {}), ...Object.fromEntries(Object.entries(i).filter(([, v]) => v !== undefined && v !== "")) });
+  for (const i of reviewed.insurances) {
+    const fresh = Object.fromEntries(Object.entries(i).filter(([, v]) => v !== undefined && v !== ""));
+    byRank.set(i.rank, replaceRanks.includes(i.rank) ? fresh : { ...(byRank.get(i.rank) ?? {}), ...fresh });
+  }
   return patientInput.parse({ ...base, insurances: [...byRank.values()] });
 }
+
+const PDF = "application/pdf";
+
+/** Check a file's sections against its pages before anything is saved. */
+function checkSections(d: typeof documents.$inferSelect, sections: SectionInput[]) {
+  if (d.mimeType !== PDF || !d.pageCount) throw new HttpError(400, `"${d.originalName}" can't be split into parts. File it as one document.`);
+  const sorted = [...sections].sort((a, b) => a.fromPage - b.fromPage);
+  for (const [i, sct] of sorted.entries()) {
+    if (sct.toPage > d.pageCount) throw new HttpError(400, `"${d.originalName}" has ${d.pageCount} pages; pages ${sct.fromPage}-${sct.toPage} don't exist`);
+    if (i > 0 && sct.fromPage <= sorted[i - 1].toPage) throw new HttpError(400, `Parts of "${d.originalName}" overlap (pages ${sorted[i - 1].fromPage}-${sorted[i - 1].toPage} and ${sct.fromPage}-${sct.toPage})`);
+  }
+}
+
+const isWholeFile = (d: typeof documents.$inferSelect, s: SectionInput[]) => s.length === 1 && !s[0].skip && s[0].fromPage === 1 && s[0].toPage === (d.pageCount ?? 1);
+const pagesText = (a: number, b: number) => (a === b ? `page ${a}` : `pages ${a}-${b}`);
 
 intakeRouter.post("/api/intake/:id/complete", requirePermission("intake.process"), async (req, res) => {
   const id = idOf(req.params.id);
@@ -197,37 +244,77 @@ intakeRouter.post("/api/intake/:id/complete", requirePermission("intake.process"
   const docs = await t.db.select().from(documents).where(eq(documents.intakeId, id));
   const docIds = new Set(docs.map((d) => d.id));
   if (input.documents.some((d) => !docIds.has(d.id))) throw new HttpError(400, "Those documents aren't part of this paperwork");
+  for (const d of input.documents) if (d.sections?.length) checkSections(docs.find((x) => x.id === d.id)!, d.sections);
 
   let patientId: number;
   if (input.decision === "new") {
     if (!input.patient) throw new HttpError(400, "Fill in the patient's details to create a new patient");
+    const patient = patientInput.parse(input.patient);
     // Don't create a duplicate by accident: a strong match must be explicitly dismissed.
-    const strong = (await findMatches(t, { lastName: input.patient.lastName, firstName: input.patient.firstName, dob: input.patient.dob, ssnLast4: input.patient.ssn ? last4(input.patient.ssn) : null, phone: input.patient.phone, claimNumber: input.patient.insurances.find((i) => i.claimNumber)?.claimNumber })).filter((m) => m.score >= 80);
+    const strong = (await findMatches(t, { lastName: patient.lastName, firstName: patient.firstName, dob: patient.dob, ssnLast4: patient.ssn ? last4(patient.ssn) : null, phone: patient.phone, claimNumber: patient.insurances.find((i) => i.claimNumber)?.claimNumber })).filter((m) => m.score >= 80);
     if (strong.length && !input.confirmNotDuplicate) {
       throw new HttpError(409, `This looks like an existing patient (${strong[0].lastName}, ${strong[0].firstName}, #${strong[0].accountNumber}). Attach it to them, or confirm it's a different person.`);
     }
-    patientId = (await createPatientRecord(req, input.patient)).id;
+    patientId = (await createPatientRecord(req, patient)).id;
   } else {
     if (!input.patientId) throw new HttpError(400, "Pick the existing patient");
     await loadPatientOr404(req, input.patientId);
     patientId = input.patientId;
-    if (input.applyUpdates && input.patient) await updatePatientRecord(req, patientId, await mergeIntoExisting(req, patientId, input.patient), "updated from intake");
+    if (input.patient) {
+      const upd = existingUpdate.parse(input.patient);
+      const changes: ExistingUpdate = input.applyUpdates ? upd : { insurances: upd.insurances };
+      if (input.applyUpdates || changes.insurances.length) {
+        await updatePatientRecord(req, patientId, await mergeIntoExisting(req, patientId, changes, input.replaceRanks), "updated from intake");
+      }
+    }
   }
 
+  // File the documents. A packet split into parts becomes one document per part; the full packet stays with the
+  // inbox item (not on the patient's file), so pages about someone else never land in this patient's documents.
+  const filed: string[] = [];
+  const setAside: string[] = [];
   for (const d of input.documents) {
-    await t.db
-      .update(documents)
-      .set({ patientId, docType: d.docType, ...(d.verified ? { verifiedAt: new Date(), verifiedBy: req.user!.initials } : {}) })
-      .where(eq(documents.id, d.id));
+    const orig = docs.find((x) => x.id === d.id)!;
+    const verifiedBy = (v: boolean) => (v ? { verifiedAt: new Date(), verifiedBy: req.user!.initials } : {});
+    if (!d.sections?.length || isWholeFile(orig, d.sections)) {
+      const s0 = d.sections?.[0];
+      const docType = s0?.docType ?? d.docType;
+      await t.db.update(documents).set({ patientId, docType, ...verifiedBy(s0?.verified ?? d.verified) }).where(eq(documents.id, d.id));
+      filed.push(docTypeLabel(docType));
+      continue;
+    }
+    const data = getFile(t, orig.storageKey);
+    const base = orig.originalName.replace(/\.pdf$/i, "");
+    for (const sct of [...d.sections].sort((a, b) => a.fromPage - b.fromPage)) {
+      if (sct.skip) {
+        setAside.push(pagesText(sct.fromPage, sct.toPage));
+        continue;
+      }
+      const part = await extractPages(data, sct.fromPage, sct.toPage);
+      await t.db.insert(documents).values({
+        patientId, intakeId: id, docType: sct.docType, title: `${docTypeLabel(sct.docType)} (${pagesText(sct.fromPage, sct.toPage)} of ${orig.originalName})`,
+        originalName: `${base}-p${sct.fromPage}${sct.toPage > sct.fromPage ? `-${sct.toPage}` : ""}.pdf`.slice(0, 200), mimeType: PDF, sizeBytes: part.length, sha256: sha256(part),
+        storageKey: putFile(t, part), source: orig.source, receivedAt: orig.receivedAt, uploadedBy: orig.uploadedBy, pageCount: sct.toPage - sct.fromPage + 1,
+        parentDocumentId: orig.id, pageFrom: sct.fromPage, pageTo: sct.toPage, ...verifiedBy(sct.verified),
+      });
+      filed.push(`${docTypeLabel(sct.docType)} (${pagesText(sct.fromPage, sct.toPage)})`);
+    }
+    await t.db.update(documents).set({ docType: "packet" }).where(eq(documents.id, orig.id));
   }
-  const summary = `Paperwork received by ${item.source}${item.sender ? ` from ${item.sender}` : ""}: ${input.documents.map((d) => docTypeLabel(d.docType)).join(", ")}. Filed to ${input.decision === "new" ? "a new patient" : "existing patient"}.${input.note ? `\n${input.note}` : ""}`;
+
+  const summary = [
+    `Paperwork received by ${item.source}${item.sender ? ` from ${item.sender}` : ""}. Filed to ${input.decision === "new" ? "a new patient" : "existing patient"}: ${filed.join(", ") || "nothing"}.`,
+    setAside.length ? `Set aside, not for this patient (still in Inbox item #${id}): ${setAside.join(", ")}.` : "",
+    input.note ?? "",
+  ].filter(Boolean).join("\n");
   await t.db.insert(notes).values({ patientId, body: summary, category: "intake", createdBy: req.user!.initials });
   await t.db.update(intakeItems).set({ status: "done", decision: input.decision, patientId, completedAt: new Date(), completedBy: req.user!.initials }).where(eq(intakeItems.id, id));
-  await audit(req, { action: "post", entityType: "intake", entityId: id, patientId, details: `${input.decision}; ${input.documents.length} documents` });
+  await audit(req, { action: "post", entityType: "intake", entityId: id, patientId, details: `${input.decision}; ${filed.length} documents filed; ${setAside.length} parts set aside` });
   publish(t.clientId, { kind: "intake" });
   publish(t.clientId, { kind: "documents", patientId });
   publish(t.clientId, { kind: "notes", patientId });
-  res.json({ patientId });
+  publish(t.clientId, { kind: "patient", patientId });
+  res.json({ patientId, filed: filed.length, setAside: setAside.length });
 });
 
 intakeRouter.post("/api/intake/:id/reject", requirePermission("intake.process"), async (req, res) => {

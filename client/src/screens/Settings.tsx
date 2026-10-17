@@ -248,7 +248,7 @@ function Requirements() {
             <tr><th className="px-4 py-2.5 text-left font-medium">Document</th>{PAYER_TYPES.map((p) => <th key={p.code} className="px-2 font-medium">{p.label}</th>)}</tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
-            {DOC_TYPES.filter((d) => d.code !== "other" && d.code !== "eob").map((d) => (
+            {DOC_TYPES.filter((d) => !["other", "eob", "packet"].includes(d.code)).map((d) => (
               <tr key={d.code}>
                 <td className="px-4 py-2 text-slate-700">{d.label}</td>
                 {PAYER_TYPES.map((p) => (

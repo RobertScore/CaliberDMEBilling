@@ -225,6 +225,11 @@ export const documents = pgTable("documents", {
   verifiedBy: text("verified_by"),
   removedAt: timestamp("removed_at", { withTimezone: true }),
   removedBy: text("removed_by"),
+  // Packets: how many pages a PDF has, and for a part split out of a packet, which file and pages it came from.
+  pageCount: integer("page_count"),
+  parentDocumentId: integer("parent_document_id"),
+  pageFrom: integer("page_from"),
+  pageTo: integer("page_to"),
 });
 
 // Follow-ups and the Call List. Created from notes with a follow-up date, or directly.

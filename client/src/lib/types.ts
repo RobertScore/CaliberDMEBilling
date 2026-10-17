@@ -117,6 +117,10 @@ export interface Doc {
   uploadedBy: string;
   verifiedAt: string | null;
   verifiedBy: string | null;
+  pageCount: number | null;
+  parentDocumentId: number | null;
+  pageFrom: number | null;
+  pageTo: number | null;
 }
 
 export interface Checklist {

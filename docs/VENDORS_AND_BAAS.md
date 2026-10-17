@@ -17,3 +17,11 @@ for PHI.
 | Client | BAA status | Signed date |
 |---|---|---|
 | SCORE (Southern California Orthopedic Rehab Equipment) | Pending | |
+
+## Software libraries that touch documents (not vendors)
+
+These run inside our own server. No data is sent to anyone, so no BAA is needed.
+
+| Library | What for |
+|---|---|
+| pdf-lib (MIT licence) | Counting pages and splitting faxed packets into separate documents |

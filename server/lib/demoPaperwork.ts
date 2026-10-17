@@ -123,6 +123,11 @@ function newReferral(): { name: string; pdf: Buffer; extraction: Extraction } {
       diagnosisCodes: ["M25.561", "S83.511A"],
       hcpcsCodes: ["E0218", "E0236"],
       documents: [{ index: 0, docType: "rx", confidence: "medium", summary: "Fax packet: cover sheet, prescription for a cold therapy unit, and patient information / RFA." }],
+      sections: [
+        { fileIndex: 0, fromPage: 1, toPage: 1, docType: "other", belongsTo: "none", confidence: "high", summary: "Fax cover sheet" },
+        { fileIndex: 0, fromPage: 2, toPage: 2, docType: "rx", belongsTo: "this_patient", confidence: "high", summary: "Prescription for a cold therapy unit" },
+        { fileIndex: 0, fromPage: 3, toPage: 3, docType: "rfa", belongsTo: "this_patient", confidence: "medium", summary: "Patient information / RFA" },
+      ],
       readerNotes: "Adjuster phone number is partly smudged. Please confirm 555-0177.",
     },
   };
@@ -158,6 +163,7 @@ function deliveryTicket(lastName: string): { name: string; pdf: Buffer; extracti
       diagnosisCodes: [],
       hcpcsCodes: ["E0666", "E0650"],
       documents: [{ index: 0, docType: "delivery_ticket", confidence: "high", summary: "Signed delivery ticket for E0666 and E0650." }],
+      sections: [{ fileIndex: 0, fromPage: 1, toPage: 1, docType: "delivery_ticket", belongsTo: "this_patient", confidence: "high", summary: "Signed delivery ticket" }],
       readerNotes: "",
     },
   };

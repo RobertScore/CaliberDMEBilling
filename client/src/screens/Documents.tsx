@@ -8,7 +8,9 @@ import { useSession } from "@/lib/session";
 import { DocumentViewer } from "@/components/DocumentViewer";
 import { Badge, EmptyState, useToast } from "@/components/ui";
 import { ErrorBox, Select } from "@/components/inputs";
-import { DOC_TYPES } from "@shared/documents";
+import { DOC_TYPES as ALL_TYPES } from "@shared/documents";
+
+const DOC_TYPES = ALL_TYPES.filter((d) => d.code !== "packet");
 
 export function ChecklistCard({ checklist, onOpen }: { checklist: Checklist; onOpen?: (docId: number) => void }) {
   return (
@@ -99,7 +101,7 @@ export function Documents({ patientId, focusDocId }: { patientId: number; focusD
                   <FileText size={15} className="text-slate-400" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-slate-800">{d.typeLabel}</span>
-                    <span className="block truncate text-2xs text-slate-400">{new Date(d.receivedAt).toLocaleDateString()} · {d.source} · {d.originalName}</span>
+                    <span className="block truncate text-2xs text-slate-400">{new Date(d.receivedAt).toLocaleDateString()} · {d.source} · {d.pageFrom ? `pages ${d.pageFrom}-${d.pageTo} of a packet` : d.originalName}</span>
                   </span>
                   {d.verifiedAt ? <ShieldCheck size={15} className="text-accent-600" /> : <span className="h-2 w-2 rounded-full bg-amber-400" title="Needs check" />}
                 </button>

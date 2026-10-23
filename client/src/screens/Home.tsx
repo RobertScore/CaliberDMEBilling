@@ -70,7 +70,7 @@ export function Home() {
         <ActionCard icon={<UserPlus size={20} />} tone="bg-navy-50 text-navy-700" title="Register a patient" body="Add a new patient and their insurance." shortcut="⌃R" onClick={() => nav.go({ name: "new-patient" })} disabled={!s.can("patient.create")} />
         <ActionCard icon={<Receipt size={20} />} tone="bg-amber-50 text-amber-700" title="Post charges" body="Enter the equipment delivered and diagnoses." shortcut="⌃K" onClick={() => nav.pickPatient("Post charges for…", (id, l) => nav.openPatient(id, l, "charge"))} disabled={!s.can("charge.post")} />
         <ActionCard icon={<Wallet size={20} />} tone="bg-accent-50 text-accent-700" title="Post a payment" body="Record a check, EFT, write-off or patient share." shortcut="⌃P" onClick={() => nav.pickPatient("Post a payment for…", (id, l) => nav.openPatient(id, l, "payment"))} disabled={!s.can("payment.post")} />
-        <ActionCard icon={<FileText size={20} />} tone="bg-violet-50 text-violet-700" title="Open a ledger" body="See everything that happened on an account." shortcut="⌃L" onClick={() => nav.pickPatient("Open the ledger for…", (id, l) => nav.openPatient(id, l, "activity"))} />
+        <ActionCard icon={<FileText size={20} />} tone="bg-violet-50 text-violet-700" title="Open a ledger" body="See everything that happened on an account." shortcut="⌃L" onClick={() => nav.pickPatient("Open the ledger for…", (id, l) => nav.openPatient(id, l, "overview"))} />
       </div>
 
       <ErrorBox error={error} />

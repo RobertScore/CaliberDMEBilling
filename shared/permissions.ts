@@ -12,6 +12,8 @@ export const PERMISSIONS = [
   "charge.post",
   "payment.post",
   "ledger.reverse",
+  "adjustment.post", // adjustments and refunds (old "Adjustments/Refunds" menu)
+  "claim.submit", // record a claim as billed and change its status
   "period.close",
   "audit.view",
   "codes.view",
@@ -60,9 +62,10 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   owner: STAFF_ALL,
   // ASSUMPTION Q-003 / Q-005: managers can reveal SSNs, close the books and manage users in their clients.
   billing_manager: STAFF_ALL,
-  biller: [...WORK, "patient.create", "patient.edit", "alert.manage", "charge.post", "document.upload", "document.verify", "intake.process"],
-  payment_poster: [...WORK, "payment.post", "document.upload"],
-  collections: [...WORK, "alert.manage", "document.upload"],
+  // ASSUMPTION Q-068: billers and collections change claim status; payment posters post adjustments and refunds.
+  biller: [...WORK, "patient.create", "patient.edit", "alert.manage", "charge.post", "claim.submit", "document.upload", "document.verify", "intake.process"],
+  payment_poster: [...WORK, "payment.post", "adjustment.post", "document.upload"],
+  collections: [...WORK, "alert.manage", "claim.submit", "document.upload"],
   auditor: ["patient.view", "audit.view", "codes.view", "document.view", "report.view"],
   // Client portal: their own client only, view and upload; admins manage their own users.
   client_admin: ["portal.client.view", "portal.client.upload", "portal.client.users", "report.view"],
@@ -91,6 +94,7 @@ export const NOTE_CATEGORIES = [
   { code: "authorization", label: "Authorization" },
   { code: "denial", label: "Denial follow-up" },
   { code: "payment", label: "Payment" },
+  { code: "claim", label: "Claim" },
   { code: "documents", label: "Documents" },
   { code: "intake", label: "Intake" },
   { code: "portal", label: "Portal message" },

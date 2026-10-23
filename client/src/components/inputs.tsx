@@ -174,7 +174,7 @@ export function Modal({ title, onClose, children, wide, subtitle }: { title: str
     return () => window.removeEventListener("keydown", h);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-navy-950/40 px-4 pt-[12vh] backdrop-blur-sm" onMouseDown={onClose}>
+    <div data-modal-open className="fixed inset-0 z-50 flex items-start justify-center bg-navy-950/40 px-4 pt-[12vh] backdrop-blur-sm" onMouseDown={onClose}>
       <div className={`card w-full ${wide ? "max-w-2xl" : "max-w-lg"} shadow-lift`} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-4 px-6 pt-5">
           <div>

@@ -90,3 +90,28 @@ export const LEDGER_KINDS = {
   adjustment: { label: "Adjustment", color: "#fed7aa" },
 } as const;
 export type LedgerKind = keyof typeof LEDGER_KINDS;
+
+/**
+ * Where a claim stands. Changed by staff from the ledger; each change is kept in claim_events and noted on the account.
+ * ASSUMPTION Q-066: starting list of claim statuses, waiting on Caliber to confirm.
+ */
+export const CLAIM_STATUSES = [
+  { code: "not_billed", label: "Ready to bill" },
+  { code: "billed", label: "Billed" },
+  { code: "pending", label: "Pending with payer" },
+  { code: "denied", label: "Denied" },
+  { code: "appeal", label: "In appeal" },
+  { code: "paid", label: "Paid" },
+  { code: "closed", label: "Closed" },
+] as const;
+export type ClaimStatus = (typeof CLAIM_STATUSES)[number]["code"];
+export const claimStatusLabel = (c: string) => CLAIM_STATUSES.find((s) => s.code === c)?.label ?? c;
+
+/** How a claim was sent (spec PT LEDGER: "CLAIM SUBMISSION (WHEN CLAIM PRINTED, TYPE, TO WHOM)"). Recording only: nothing is sent. */
+export const SUBMIT_METHODS = [
+  { code: "electronic", label: "Electronic (837P)" },
+  { code: "paper", label: "Paper (CMS-1500)" },
+  { code: "fax", label: "Fax" },
+  { code: "portal", label: "Payer portal" },
+  { code: "mail", label: "Mail with attachments" },
+] as const;

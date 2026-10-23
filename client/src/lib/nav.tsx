@@ -2,7 +2,8 @@
 // Two patients can be shown side by side.
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 
-export type Section = "overview" | "activity" | "documents" | "charge" | "payment" | "details" | "notes";
+// "overview" is the account screen (the ledger); the others open as a panel over it, so the ledger stays in view.
+export type Section = "overview" | "documents" | "charge" | "payment" | "lines" | "adjust" | "details" | "notes";
 export type Screen = "home" | "inbox" | "calls" | "patients" | "new-patient" | "reports" | "audit" | "close" | "users" | "settings";
 export type PatientTab = { id: number; label: string; section: Section };
 export type View = { name: Screen } | { name: "intake"; id: number } | { name: "patient"; id: number };

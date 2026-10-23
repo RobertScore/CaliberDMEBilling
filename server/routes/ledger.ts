@@ -1,19 +1,22 @@
 // Charge entry, payment posting and the patient ledger. One client's database only (req.tenant).
 import { Router, type Request } from "express";
 import { and, asc, desc, eq, isNull, max, sql } from "drizzle-orm";
-import { auditLog, encounters, ledgerEntries, patientInsurances, patients, periodCloses, serviceLines } from "@shared/schema/tenant";
-import { encounterInput, paymentInput, periodCloseInput, reverseInput } from "@shared/validation";
-import { NO_PATIENT_BILLING_PAYER_TYPES, type PayerType } from "@shared/picklists";
+import { auditLog, claimEvents, encounters, ledgerEntries, notes, patientInsurances, patients, periodCloses, serviceLines } from "@shared/schema/tenant";
+import { adjustmentInput, claimStatusInput, encounterInput, linePaymentInput, paymentInput, periodCloseInput, reverseInput } from "@shared/validation";
+import { NO_PATIENT_BILLING_PAYER_TYPES, SUBMIT_METHODS, claimStatusLabel, type PayerType } from "@shared/picklists";
+import { isoToDisplay } from "@shared/dates";
+import { formatCents } from "@shared/money";
 import { findItem } from "../lib/lists";
 import { publish } from "../lib/events";
 import { todayIso } from "@shared/dates";
 import { sumCents } from "@shared/money";
 import { codeProblems } from "../lib/codesets";
+import { ageEntries } from "../lib/aging";
 import { HttpError, audit, requireAuth, requireClient, requirePermission } from "../middleware";
 import { loadPatientOr404 } from "./patients";
 
 export const ledgerRouter = Router();
-ledgerRouter.use(["/api/patients", "/api/ledger", "/api/periods", "/api/audit", "/api/dashboard"], requireAuth, requireClient);
+ledgerRouter.use(["/api/patients", "/api/ledger", "/api/encounters", "/api/periods", "/api/audit", "/api/dashboard"], requireAuth, requireClient);
 
 function idParam(req: Request, name = "id"): number {
   const n = Number(req.params[name]);
@@ -46,20 +49,15 @@ ledgerRouter.get("/api/patients/:id/ledger", requirePermission("patient.view"), 
     ? (await db.select().from(serviceLines)).filter((l) => encs.some((e) => e.id === l.encounterId))
     : [];
   const ins = await db.select().from(patientInsurances).where(eq(patientInsurances.patientId, id)).orderBy(asc(patientInsurances.rank));
+  const events = await db.select().from(claimEvents).where(eq(claimEvents.patientId, id)).orderBy(asc(claimEvents.id));
 
   const insuranceBalanceCents = sumCents(entries.map((e) => e.insuranceDeltaCents));
   const patientBalanceCents = sumCents(entries.map((e) => e.patientDeltaCents));
   const reversed = new Set(entries.filter((e) => e.reversesEntryId).map((e) => e.reversesEntryId!));
 
   // Financial summary (old "Summary" button): aging of what's still owed, by date of service.
-  const today = todayIso();
-  const buckets = { "0-30": 0, "31-60": 0, "61-90": 0, "91-120": 0, "121+": 0 } as Record<string, number>;
-  for (const e of entries) {
-    const from = e.serviceDateFrom ?? e.postDate;
-    const days = Math.floor((Date.parse(today) - Date.parse(from)) / 86400000);
-    const key = days <= 30 ? "0-30" : days <= 60 ? "31-60" : days <= 90 ? "61-90" : days <= 120 ? "91-120" : "121+";
-    buckets[key] += e.insuranceDeltaCents + e.patientDeltaCents;
-  }
+  // Payments age with their claim's service date (same rule as the overview).
+  const buckets = ageEntries(entries, new Map(encs.map((e) => [e.id, e.serviceDateFrom])), todayIso());
   const totalsByKind: Record<string, number> = {};
   for (const e of entries) totalsByKind[e.kind] = (totalsByKind[e.kind] ?? 0) + e.insuranceDeltaCents + e.patientDeltaCents;
 
@@ -69,6 +67,7 @@ ledgerRouter.get("/api/patients/:id/ledger", requirePermission("patient.view"), 
     insurances: ins.map((i) => ({ rank: i.rank, payerName: i.payerName, payerType: i.payerType, claimNumber: i.claimNumber, memberIdMasked: i.memberIdLast4 ? `****${i.memberIdLast4}` : null })),
     encounters: encs.map((e) => ({ ...e, lines: lines.filter((l) => l.encounterId === e.id).sort((a, b) => a.lineNumber - b.lineNumber) })),
     entries: entries.map((e) => ({ ...e, reversed: reversed.has(e.id) })),
+    claimEvents: events,
     balances: { insuranceBalanceCents, patientBalanceCents, totalBalanceCents: insuranceBalanceCents + patientBalanceCents },
     summary: { aging: buckets, totalsByKind },
     closedThrough: await closedThrough(req),
@@ -185,6 +184,125 @@ ledgerRouter.post("/api/patients/:id/payments", requirePermission("payment.post"
   await audit(req, { action: "post", entityType: "payment", entityId: inserted.map((r) => r.id).join(","), patientId: id });
   publish(req.tenant!.clientId, { kind: "ledger", patientId: id });
   res.status(201).json({ entries: inserted, warnings });
+});
+
+/** The claim, checked to belong to this patient. */
+async function claimOf(req: Request, patientId: number, encounterId: number) {
+  const [e] = await req.tenant!.db.select().from(encounters).where(and(eq(encounters.id, encounterId), eq(encounters.patientId, patientId)));
+  if (!e) throw new HttpError(404, "Claim data not found for this patient");
+  return e;
+}
+
+const NO_BALANCE_BILLING = "This is a Work Comp / VA patient. Patients generally can't be billed for these claims (open question Q-046).";
+
+/**
+ * Line item posting (old "LINE ITEM POSTING", Ctrl+U): one check, amounts per charge line.
+ * Each amount becomes its own ledger entry tied to the line, so every line has its own balance.
+ */
+ledgerRouter.post("/api/patients/:id/line-payments", requirePermission("payment.post"), async (req, res) => {
+  const id = idParam(req);
+  const patient = await loadPatientOr404(req, id);
+  const p = linePaymentInput.parse(req.body);
+  const postDate = todayIso();
+  await assertOpenPeriod(req, postDate);
+  if (p.depositDate > postDate) throw new HttpError(400, "Deposit date can't be in the future");
+  if (!(await findItem("payment_type", p.paymentType))) throw new HttpError(400, "Unknown payment type");
+  const enc = await claimOf(req, id, p.encounterId);
+  const db = req.tenant!.db;
+  const lines = await db.select().from(serviceLines).where(eq(serviceLines.encounterId, enc.id));
+  if (new Set(p.lines.map((l) => l.serviceLineId)).size !== p.lines.length) throw new HttpError(400, "A line is listed twice");
+
+  const base = {
+    patientId: id, postDate, depositDate: p.depositDate, serviceDateFrom: enc.serviceDateFrom, serviceDateTo: enc.serviceDateTo, encounterId: enc.id,
+    payerName: p.payerName, paymentType: p.paymentType, checkNumber: p.checkNumber ?? null, claimControlNumber: p.claimControlNumber ?? null,
+    batchNumber: p.batchNumber ?? null, createdBy: req.user!.initials,
+  };
+  const rows = [] as (typeof ledgerEntries.$inferInsert)[];
+  const warnings: string[] = [];
+  for (const l of p.lines) {
+    const line = lines.find((x) => x.id === l.serviceLineId);
+    if (!line) throw new HttpError(400, "That line isn't part of this claim");
+    const code = [line.hcpcsCode, ...line.modifiers].join(" ");
+    const lineBase = { ...base, serviceLineId: line.id, code, quantity: null, allowedCents: l.allowedCents ?? null };
+    if (l.paymentCents > 0) {
+      rows.push({ ...lineBase, kind: "payment", description: `${p.payerIsPatient ? "PATIENT PAYMENT" : "PAYMENT"} ${p.paymentType}${p.checkNumber ? ` #${p.checkNumber}` : ""}`, insuranceDeltaCents: p.payerIsPatient ? 0 : -l.paymentCents, patientDeltaCents: p.payerIsPatient ? -l.paymentCents : 0 });
+    }
+    if (l.writeoffCents > 0) {
+      const w = await findItem("writeoff", l.writeoffType ?? "");
+      if (!w) throw new HttpError(400, "Unknown write-off type");
+      rows.push({ ...lineBase, kind: "writeoff", reasonCode: w.code, description: w.label, insuranceDeltaCents: -l.writeoffCents, patientDeltaCents: 0 });
+    }
+    if (l.patShareCents > 0) {
+      const s2 = await findItem("pat_share", l.patShareType ?? "");
+      if (!s2) throw new HttpError(400, "Unknown patient share type");
+      rows.push({ ...lineBase, kind: "pat_share", reasonCode: s2.code, description: s2.label, insuranceDeltaCents: -l.patShareCents, patientDeltaCents: l.patShareCents });
+    }
+  }
+  // ASSUMPTION Q-012 / Q-046: Work Comp and VA patients generally can't be billed. We allow the entry but warn.
+  if (rows.some((r) => r.kind === "pat_share") && NO_PATIENT_BILLING_PAYER_TYPES.includes(patient.coverageType as PayerType)) warnings.push(NO_BALANCE_BILLING);
+  const inserted = await db.insert(ledgerEntries).values(rows).returning();
+  await audit(req, { action: "post", entityType: "payment", entityId: inserted.map((r) => r.id).join(","), patientId: id, details: `line item posting, ${p.lines.length} lines` });
+  publish(req.tenant!.clientId, { kind: "ledger", patientId: id });
+  res.status(201).json({ entries: inserted, warnings });
+});
+
+/**
+ * Adjustments and refunds (old "Adjustments/Refunds" menu, Ctrl+J).
+ * ASSUMPTION Q-067: a refund puts back on the balance money we had already counted as paid (a payer or patient
+ * overpaid and we sent it back); an adjustment raises or lowers what insurance or the patient owes, with a reason.
+ */
+ledgerRouter.post("/api/patients/:id/adjustments", requirePermission("adjustment.post"), async (req, res) => {
+  const id = idParam(req);
+  const patient = await loadPatientOr404(req, id);
+  const a = adjustmentInput.parse(req.body);
+  const postDate = todayIso();
+  await assertOpenPeriod(req, postDate);
+  const enc = a.encounterId ? await claimOf(req, id, a.encounterId) : null;
+  const signed = a.direction === "increase" ? a.amountCents : -a.amountCents;
+  const description = a.kind === "refund"
+    ? `REFUND to ${a.paidTo}${a.checkNumber ? ` #${a.checkNumber}` : ""}: ${a.reason}`
+    : `ADJUSTMENT (${a.side === "insurance" ? "insurance" : "patient"} ${a.direction === "increase" ? "+" : "-"}): ${a.reason}`;
+  const [row] = await req.tenant!.db
+    .insert(ledgerEntries)
+    .values({
+      patientId: id, kind: a.kind, postDate, serviceDateFrom: enc?.serviceDateFrom ?? null, serviceDateTo: enc?.serviceDateTo ?? null, encounterId: enc?.id ?? null,
+      description: description.slice(0, 250), payerName: a.kind === "refund" ? a.paidTo ?? null : null, paymentType: a.paymentType ?? null, checkNumber: a.checkNumber ?? null,
+      insuranceDeltaCents: a.side === "insurance" ? signed : 0, patientDeltaCents: a.side === "patient" ? signed : 0, createdBy: req.user!.initials,
+    })
+    .returning();
+  const warnings = a.side === "patient" && signed > 0 && NO_PATIENT_BILLING_PAYER_TYPES.includes(patient.coverageType as PayerType) ? [NO_BALANCE_BILLING] : [];
+  await audit(req, { action: "post", entityType: a.kind, entityId: row.id, patientId: id });
+  publish(req.tenant!.clientId, { kind: "ledger", patientId: id });
+  res.status(201).json({ entry: row, warnings });
+});
+
+/**
+ * Record that a claim was sent (how and to whom) or change its status. This only records what happened:
+ * nothing is sent to a payer from here (CLAUDE.md 3.5). Each change is kept and noted on the account.
+ */
+ledgerRouter.post("/api/encounters/:encounterId/status", requirePermission("claim.submit"), async (req, res) => {
+  const encounterId = idParam(req, "encounterId");
+  const input = claimStatusInput.parse(req.body);
+  const db = req.tenant!.db;
+  const [enc] = await db.select().from(encounters).where(eq(encounters.id, encounterId));
+  if (!enc) throw new HttpError(404, "Claim not found");
+  await loadPatientOr404(req, enc.patientId);
+  const [policy] = await db.select().from(patientInsurances).where(and(eq(patientInsurances.patientId, enc.patientId), eq(patientInsurances.rank, enc.insuranceRank)));
+  const sentTo = input.status === "billed" ? input.sentTo ?? policy?.payerName ?? null : input.sentTo ?? null;
+  const [ev] = await db
+    .insert(claimEvents)
+    .values({ patientId: enc.patientId, encounterId, status: input.status, previousStatus: enc.claimStatus, method: input.status === "billed" ? input.method ?? null : null, sentTo, note: input.note ?? null, createdBy: req.user!.initials })
+    .returning();
+  await db.update(encounters).set({ claimStatus: input.status }).where(eq(encounters.id, encounterId));
+  // Spec: every action on an account is noted.
+  const lines = await db.select().from(serviceLines).where(eq(serviceLines.encounterId, encounterId));
+  const how = input.status === "billed" ? ` ${SUBMIT_METHODS.find((m) => m.code === input.method)?.label ?? input.method}${sentTo ? ` to ${sentTo}` : ""}` : "";
+  const body = `Claim for service ${isoToDisplay(enc.serviceDateFrom)} ($${formatCents(lines.reduce((t, l) => t + l.chargeCents, 0))}): ${claimStatusLabel(enc.claimStatus)} → ${claimStatusLabel(input.status)}.${how ? ` Sent${how}.` : ""}${input.note ? ` ${input.note}` : ""}`;
+  await db.insert(notes).values({ patientId: enc.patientId, body, category: "claim", createdBy: req.user!.initials });
+  await audit(req, { action: "update", entityType: "claim", entityId: encounterId, patientId: enc.patientId, details: `${enc.claimStatus} -> ${input.status}` });
+  publish(req.tenant!.clientId, { kind: "ledger", patientId: enc.patientId });
+  publish(req.tenant!.clientId, { kind: "notes", patientId: enc.patientId });
+  res.status(201).json(ev);
 });
 
 /** Fix a mistake: post an equal-and-opposite entry that points to the original. Nothing is erased. */

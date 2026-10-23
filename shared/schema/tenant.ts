@@ -138,6 +138,22 @@ export const ledgerEntries = pgTable("ledger_entries", {
   reasonCode: text("reason_code"), // write-off type or patient-share type
   batchNumber: text("batch_number"),
   reversesEntryId: integer("reverses_entry_id"),
+  allowedCents: integer("allowed_cents"), // line item posting: what the payer approved for this line
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdBy: text("created_by").notNull(),
+});
+
+// Claim submissions and status changes (spec PT LEDGER: "CLAIM SUBMISSION (WHEN CLAIM PRINTED, TYPE, TO WHOM)").
+// Append-only, like the ledger. encounters.claim_status holds the latest status for quick lookups.
+export const claimEvents = pgTable("claim_events", {
+  id: serial("id").primaryKey(),
+  patientId: integer("patient_id").notNull().references(() => patients.id),
+  encounterId: integer("encounter_id").notNull().references(() => encounters.id),
+  status: text("status").notNull(),
+  previousStatus: text("previous_status"),
+  method: text("method"), // electronic, paper, fax, portal, mail (only when billed)
+  sentTo: text("sent_to"),
+  note: text("note"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   createdBy: text("created_by").notNull(),
 });

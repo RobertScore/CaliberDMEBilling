@@ -56,10 +56,10 @@ export function NoteComposer({ patientId, overview, compact }: { patientId: numb
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative">
+        <div className="relative min-w-0 max-w-full">
           <FileText size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <select
-            className="h-8 rounded-md border border-slate-200 bg-white pl-7 pr-6 text-xs text-slate-600"
+            className="h-8 w-full max-w-full rounded-md border border-slate-200 bg-white pl-7 pr-6 text-xs text-slate-600"
             value=""
             onChange={(e) => {
               const t = templates.data?.find((x) => x.id === Number(e.target.value));

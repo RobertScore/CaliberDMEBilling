@@ -41,3 +41,9 @@ body {
   .no-print { display: none !important; }
   body { background: white; }
 }
+
+/* Side panel (Drawer) slides in from the right. */
+@keyframes slideIn {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}

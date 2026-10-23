@@ -76,6 +76,11 @@ export interface LedgerEntry {
   reversesEntryId: number | null;
   reversed: boolean;
   encounterId: number | null;
+  serviceLineId: number | null;
+  allowedCents: number | null;
+  paymentType: string | null;
+  claimControlNumber: string | null;
+  batchNumber: string | null;
   createdAt: string;
   createdBy: string;
 }
@@ -99,8 +104,11 @@ export interface LedgerView {
   entries: LedgerEntry[];
   balances: { insuranceBalanceCents: number; patientBalanceCents: number; totalBalanceCents: number };
   summary: { aging: Record<string, number>; totalsByKind: Record<string, number> };
+  claimEvents: ClaimEvent[];
   closedThrough: string | null;
 }
+
+export interface ClaimEvent { id: number; encounterId: number; status: string; previousStatus: string | null; method: string | null; sentTo: string | null; note: string | null; createdAt: string; createdBy: string }
 
 export interface Doc {
   id: number;

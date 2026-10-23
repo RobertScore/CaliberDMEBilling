@@ -11,10 +11,10 @@ import { PAT_SHARE_TYPES, PAYMENT_TYPES, WRITEOFF_TYPES } from "@shared/picklist
 import { isoToDisplay, todayIso } from "@shared/dates";
 import { formatCents, sumCents } from "@shared/money";
 
-export function PaymentPosting({ L, onDone }: { L: LedgerView; onDone: () => void }) {
+export function PaymentPosting({ L, encounterId: initial, onDone }: { L: LedgerView; encounterId?: number; onDone: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [encounterId, setEncounterId] = useState<number | undefined>(L.encounters.at(-1)?.id);
+  const [encounterId, setEncounterId] = useState<number | undefined>(initial ?? L.encounters.at(-1)?.id);
   const [depositDate, setDepositDate] = useState<string | undefined>(todayIso()); // spec: defaults to the login date
   const [payerChoice, setPayerChoice] = useState<string>(L.insurances[0] ? `ins${L.insurances[0].rank}` : "patient");
   const [paymentType, setPaymentType] = useState<string>("CHECK");
@@ -201,7 +201,6 @@ export function PaymentPosting({ L, onDone }: { L: LedgerView; onDone: () => voi
           </button>
           {missing.length > 0 && <div className="mt-2 text-center text-xs text-slate-400">Still needed: {missing.join(", ")}</div>}
           <div className="mt-3"><ErrorBox error={submit.error} /></div>
-          <p className="mt-3 text-2xs text-slate-400">Line-item posting (up to 20 lines) arrives in Phase 2.</p>
         </div>
       </aside>
     </div>

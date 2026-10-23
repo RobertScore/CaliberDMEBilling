@@ -45,6 +45,29 @@ Control database (NO patient data)               One database PER CLIENT (patien
 - Mistakes are fixed with a **reversal**: a new entry, equal and opposite, that
   points to the original.
 
+## The account screen (ledger first)
+
+Opening a patient shows the account screen (`client/src/screens/Account.tsx`). The ledger is the main feature,
+and every action opens as a slide-out panel over it (`components/Drawer.tsx`), so the team never leaves it:
+post charges (Ctrl+K), post a payment (Ctrl+P), line item posting (Ctrl+U), adjustment or refund (Ctrl+J),
+notes and alerts, documents, patient and insurance details. Ctrl+L closes the panel.
+
+- **Ledger grid**: color-coded rows (Settings → ledger colors) for claim data, charges (brown, yellow once the
+  claim is billed), claim submissions and status changes (white), payments, write-offs, patient share, refunds
+  and adjustments. Two views: **by claim** (each charge with its own line balance, a subtotal per claim) and
+  **date order** (one running balance). Filter by type, claim, posted dates and words; reversed pairs are hidden
+  unless "Show reversed" is ticked (spec: "Show Deleted Items"). Click a row (or ↑ ↓ Enter) for every detail
+  (entered when/by, deposit date, check #, claim control #, batch, reason, allowed amount, line, reversal links)
+  and actions on it: post to this claim, line items, adjust, a note about this entry, reverse.
+- **Claim rows** carry the claim's status and buttons for Mark billed / Status, Post payment and Line items.
+  Status changes are stored in `claim_events` (append-only, database trigger) and noted on the account.
+- **Summary** (old Summary button): aging by service date and totals by type for the insurance and patient sides.
+- **Side column**: alerts (add / remove), pending calls (add / mark done), notes (write one, see the latest),
+  insurance, and the documents checklist.
+- Server routes: `POST /api/patients/:id/line-payments`, `POST /api/patients/:id/adjustments`,
+  `POST /api/encounters/:id/status`; permissions `payment.post`, `adjustment.post`, `claim.submit`.
+  Tests: `tests/ledger-account.test.ts` (including cross-client and permission checks).
+
 ## Folders
 
 | Folder | What's in it |

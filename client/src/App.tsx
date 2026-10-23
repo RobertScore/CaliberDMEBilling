@@ -83,13 +83,17 @@ function Workspace() {
       if (!(e.ctrlKey || e.altKey) || e.shiftKey || e.metaKey) return;
       const k = e.code.replace("Key", "").toLowerCase();
       const v = nav.view;
-      const withPatient = (section: "activity" | "charge" | "payment", purpose: string) =>
+      // Every patient action opens as a panel over that patient's ledger (Ctrl+L closes the panel, back to the ledger).
+      const withPatient = (section: "overview" | "charge" | "payment" | "lines" | "adjust", purpose: string) =>
         v.name === "patient" ? nav.setSection(v.id, section) : nav.pickPatient(purpose, (id, l) => nav.openPatient(id, l, section));
       const actions: Record<string, () => void> = {
         r: () => s.can("patient.create") && nav.go({ name: "new-patient" }),
-        l: () => withPatient("activity", "Open the ledger for…"),
+        l: () => withPatient("overview", "Open the ledger for…"),
         k: () => s.can("charge.post") && withPatient("charge", "Post charges for…"),
         p: () => s.can("payment.post") && withPatient("payment", "Post a payment for…"),
+        // Old system: Ctrl+U line item posting, Ctrl+J adjustments (TRAN MENU). ASSUMPTION Q-069: browsers use these too.
+        u: () => s.can("payment.post") && withPatient("lines", "Post line items for…"),
+        j: () => s.can("adjustment.post") && withPatient("adjust", "Post an adjustment or refund for…"),
         o: () => s.can("task.manage") && nav.go({ name: "calls" }),
       };
       if (!actions[k]) return;

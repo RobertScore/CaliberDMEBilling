@@ -1,30 +1,36 @@
-// One patient's workspace. Opens on the Overview: everything about the account on one screen.
-// Each open patient keeps its own section, so you can jump between many patients without losing your place.
+// One patient's workspace: the account screen, with the ledger as the main feature (PT LEDGER tab).
+// Every action (charges, payments, line items, adjustments, notes, documents, patient details) opens as a panel
+// over the ledger, so the billing team never leaves this screen. Each open patient keeps its own open panel.
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Activity as ActivityIcon, Receipt, Wallet, IdCard, MessageSquareText, LayoutDashboard, FolderOpen, Printer, BellRing, Columns2, X, Smartphone } from "lucide-react";
+import { Receipt, Wallet, IdCard, MessageSquareText, FolderOpen, Printer, BellRing, Columns2, X, Smartphone, ListChecks, Scale } from "lucide-react";
 import { get, post } from "@/lib/api";
 import type { LedgerView, Overview as O } from "@/lib/types";
 import { useNav, type Section } from "@/lib/nav";
 import { useSession } from "@/lib/session";
 import { Avatar, CoverageBadge } from "@/components/ui";
 import { ErrorBox, Modal, Money } from "@/components/inputs";
+import { Drawer } from "@/components/Drawer";
 import { ageOn, isoToDisplay, todayIso } from "@shared/dates";
-import { Overview } from "./Overview";
-import { Activity } from "./Activity";
+import { Account, type ActionContext } from "./Account";
 import { ChargeEntry } from "./ChargeEntry";
+import { LinePosting } from "./LinePosting";
+import { AdjustRefund } from "./AdjustRefund";
 import { PaymentPosting } from "./PaymentPosting";
 import { PatientForm } from "./PatientForm";
 import { NotesAlerts } from "./NotesAlerts";
 import { Documents } from "./Documents";
 
-/** Charges, payments and the ledger need the full ledger; load it only when one of those is open. */
-function LedgerSection({ id, children }: { id: number; children: (L: LedgerView) => ReactNode }) {
-  const ledger = useQuery({ queryKey: ["ledger", id], queryFn: () => get<LedgerView>(`/api/patients/${id}/ledger`) });
-  if (ledger.isLoading) return <div className="p-6 text-slate-500">Loading ledger…</div>;
-  if (!ledger.data) return <ErrorBox error={ledger.error} />;
-  return <>{children(ledger.data)}</>;
-}
+/** Panels that open over the ledger, with their keyboard shortcuts (old system's, where it had one). */
+const PANELS: Partial<Record<Section, { title: string; keys?: string }>> = {
+  charge: { title: "Post charges", keys: "Ctrl+K" },
+  payment: { title: "Post a payment", keys: "Ctrl+P" },
+  lines: { title: "Line item posting", keys: "Ctrl+U" },
+  adjust: { title: "Adjustment or refund", keys: "Ctrl+J" },
+  notes: { title: "Notes & alerts" },
+  documents: { title: "Documents" },
+  details: { title: "Patient & insurance" },
+};
 
 /** Give the patient their own portal login (they see only their own account). */
 function PortalInvite({ id }: { id: number }) {
@@ -51,6 +57,8 @@ export function PatientWorkspace({ id, section, compact, narrow, onClose }: { id
   const nav = useNav();
   const { can } = useSession();
   const ov = useQuery({ queryKey: ["overview", id], queryFn: () => get<O>(`/api/patients/${id}/overview`) });
+  const ledger = useQuery({ queryKey: ["ledger", id], queryFn: () => get<LedgerView>(`/api/patients/${id}/ledger`) });
+  const [ctx, setCtx] = useState<ActionContext>({});
   const [alertsShown, setAlertsShown] = useState(false);
   const [showAlerts, setShowAlerts] = useState(false);
   const [focusDoc, setFocusDoc] = useState<number | null>(null);
@@ -63,31 +71,31 @@ export function PatientWorkspace({ id, section, compact, narrow, onClose }: { id
     }
   }, [ov.data, alertsShown]);
 
-  if (ov.isLoading) return <div className="p-10 text-slate-500">Loading account…</div>;
-  if (!ov.data) return <div className="p-10"><ErrorBox error={ov.error} /></div>;
+  if (ov.isLoading || ledger.isLoading) return <div className="p-10 text-slate-500">Loading account…</div>;
+  if (!ov.data || !ledger.data) return <div className="p-10"><ErrorBox error={ov.error ?? ledger.error} /></div>;
+  const L = ledger.data;
   const o = ov.data;
   const p = o.patient;
   const name = `${p.lastName}, ${p.firstName}`;
   const go = (s: Section) => nav.setSection(id, s);
-  const openDoc = (docId: number) => {
-    setFocusDoc(docId);
-    go("documents");
-  };
+  const open = (s: Section, c: ActionContext = {}) => { setCtx(c); go(s); };
+  const close = () => { setCtx({}); setFocusDoc(null); go("overview"); };
+  const panel = PANELS[section];
   const prim = p.insurances.find((i) => i.rank === 1);
   const docsToDo = o.checklist.missingCount + o.checklist.unverifiedCount;
 
-  const tabs: { key: Section; label: string; icon: ReactNode; show: boolean; count?: number; tone?: string }[] = [
-    { key: "overview", label: "Overview", icon: <LayoutDashboard size={16} />, show: true },
-    { key: "activity", label: "Ledger", icon: <ActivityIcon size={16} />, show: true },
-    { key: "documents", label: "Documents", icon: <FolderOpen size={16} />, show: can("document.view"), count: docsToDo || undefined, tone: "amber" },
-    { key: "charge", label: "Post charges", icon: <Receipt size={16} />, show: can("charge.post") },
-    { key: "payment", label: "Post a payment", icon: <Wallet size={16} />, show: can("payment.post") },
-    { key: "details", label: "Patient & insurance", icon: <IdCard size={16} />, show: true },
-    { key: "notes", label: "Notes & alerts", icon: <MessageSquareText size={16} />, show: true, count: o.alerts.length || undefined, tone: "red" },
+  const actions: { key: Section; label: string; icon: ReactNode; show: boolean; keys?: string; count?: number; tone?: string }[] = [
+    { key: "charge", label: "Post charges", icon: <Receipt size={15} />, show: can("charge.post"), keys: "Ctrl+K" },
+    { key: "payment", label: "Post payment", icon: <Wallet size={15} />, show: can("payment.post"), keys: "Ctrl+P" },
+    { key: "lines", label: "Line items", icon: <ListChecks size={15} />, show: can("payment.post") && L.encounters.length > 0, keys: "Ctrl+U" },
+    { key: "adjust", label: "Adjust / refund", icon: <Scale size={15} />, show: can("adjustment.post"), keys: "Ctrl+J" },
+    { key: "notes", label: "Notes & alerts", icon: <MessageSquareText size={15} />, show: true, count: o.alerts.length || undefined, tone: "red" },
+    { key: "documents", label: "Documents", icon: <FolderOpen size={15} />, show: can("document.view"), count: docsToDo || undefined, tone: "amber" },
+    { key: "details", label: "Patient & insurance", icon: <IdCard size={15} />, show: true },
   ];
 
   return (
-    <div className={compact ? "px-4 py-4" : "mx-auto w-full max-w-7xl px-8 py-6"}>
+    <div className={compact ? "px-4 py-4" : "mx-auto w-full max-w-[1800px] px-6 py-5"}>
       <div className="card overflow-hidden">
         <div className={`flex flex-wrap items-center gap-4 ${compact ? "p-4" : "p-5"}`}>
           <Avatar name={name} size={compact ? 40 : 52} />
@@ -132,17 +140,17 @@ export function PatientWorkspace({ id, section, compact, narrow, onClose }: { id
           )}
         </div>
 
-        <div className="no-print flex items-center gap-0.5 overflow-x-auto border-t border-slate-100 px-3">
-          {tabs.filter((t) => t.show && (!compact || ["overview", "activity", "notes", "documents"].includes(t.key))).map((t) => (
+        <div className="no-print flex flex-wrap items-center gap-1 border-t border-slate-100 px-3 py-2">
+          {actions.filter((t) => t.show && (!compact || ["charge", "payment", "notes", "documents"].includes(t.key))).map((t) => (
             <button
               key={t.key}
-              onClick={() => go(t.key)}
-              className={`relative flex shrink-0 items-center gap-1.5 px-3 py-3 text-sm font-medium transition ${section === t.key ? "text-navy-800" : "text-slate-500 hover:text-slate-800"}`}
+              onClick={() => open(t.key)}
+              title={t.keys ? `${t.label} (${t.keys})` : t.label}
+              className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium transition ${section === t.key ? "bg-navy-800 text-white" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"}`}
             >
               {t.icon}
               {t.label}
               {t.count && <span className={`rounded-full px-1.5 text-2xs ${t.tone === "red" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800"}`}>{t.count}</span>}
-              {section === t.key && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-navy-800" />}
             </button>
           ))}
           {!compact && (
@@ -158,8 +166,8 @@ export function PatientWorkspace({ id, section, compact, narrow, onClose }: { id
               >
                 <Columns2 size={15} /> Side by side
               </button>
-              <button className="btn btn-ghost btn-sm" onClick={() => window.print()} title="Print">
-                <Printer size={15} />
+              <button className="btn btn-ghost btn-sm" onClick={() => window.print()} title="Print the ledger">
+                <Printer size={15} /> Print
               </button>
             </div>
           )}
@@ -167,19 +175,25 @@ export function PatientWorkspace({ id, section, compact, narrow, onClose }: { id
       </div>
 
       <div className="mt-5">
-        {section === "overview" && <Overview o={o} go={go} onOpenDoc={openDoc} compact={compact} narrow={narrow} />}
-        {section === "activity" && <LedgerSection id={id}>{(L) => <Activity L={L} />}</LedgerSection>}
-        {section === "charge" && <LedgerSection id={id}>{(L) => <ChargeEntry L={L} onDone={() => go("overview")} />}</LedgerSection>}
-        {section === "payment" && <LedgerSection id={id}>{(L) => <PaymentPosting L={L} onDone={() => go("overview")} />}</LedgerSection>}
-        {section === "documents" && <Documents patientId={id} focusDocId={focusDoc} key={focusDoc ?? 0} />}
-        {section === "details" && (
-          <>
-            <PatientForm patientId={id} onSaved={() => undefined} />
-            {can("portal.invite") && <PortalInvite id={id} />}
-          </>
-        )}
-        {section === "notes" && <NotesAlerts patientId={id} alerts={o.alerts} overview={o} />}
+        <Account o={o} L={L} open={open} compact={compact || narrow} />
       </div>
+
+      {panel && (
+        <Drawer title={panel.title} subtitle={<>{name} · #{p.accountNumber}{panel.keys ? ` · ${panel.keys}` : ""}</>} onClose={close}>
+          {section === "charge" && <ChargeEntry L={L} onDone={close} />}
+          {section === "payment" && <PaymentPosting L={L} encounterId={ctx.encounterId} onDone={close} />}
+          {section === "lines" && <LinePosting L={L} encounterId={ctx.encounterId} onDone={close} />}
+          {section === "adjust" && <AdjustRefund L={L} encounterId={ctx.encounterId} onDone={close} />}
+          {section === "documents" && <Documents patientId={id} focusDocId={focusDoc} key={focusDoc ?? 0} />}
+          {section === "details" && (
+            <>
+              <PatientForm patientId={id} onSaved={() => undefined} />
+              {can("portal.invite") && <PortalInvite id={id} />}
+            </>
+          )}
+          {section === "notes" && <NotesAlerts patientId={id} alerts={o.alerts} overview={o} />}
+        </Drawer>
+      )}
 
       {showAlerts && o.alerts.length > 0 && (
         <Modal title="Heads up on this account" subtitle={name} onClose={() => setShowAlerts(false)}>
@@ -195,7 +209,7 @@ export function PatientWorkspace({ id, section, compact, narrow, onClose }: { id
             ))}
           </div>
           <div className="mt-5 flex justify-end gap-2">
-            <button className="btn" onClick={() => { setShowAlerts(false); go("notes"); }}>Manage alerts</button>
+            <button className="btn" onClick={() => { setShowAlerts(false); open("notes"); }}>Manage alerts</button>
             <button className="btn btn-primary" autoFocus onClick={() => setShowAlerts(false)}>Got it</button>
           </div>
         </Modal>
